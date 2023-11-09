@@ -103,9 +103,10 @@ swap(int *a, int *b)
 void
 bresenham(Memimage *dst, Point p0, Point p1, Memimage *src)
 {
-	int steep = 0, Δe, e;
+	int steep = 0, Δe, e, Δy;
 	Point p, dp;
 
+	/* transpose the points */
 	if(abs(p0.x-p1.x) < abs(p0.y-p1.y)){
 		steep = 1;
 		swap(&p0.x, &p0.y);
@@ -121,6 +122,7 @@ bresenham(Memimage *dst, Point p0, Point p1, Memimage *src)
 	dp = subpt(p1, p0);
 	Δe = 2*abs(dp.y);
 	e = 0;
+	Δy = p1.y > p0.y? 1: -1;
 
 	for(p = p0; p.x <= p1.x; p.x++){
 		if(steep) swap(&p.x, &p.y);
@@ -129,10 +131,18 @@ bresenham(Memimage *dst, Point p0, Point p1, Memimage *src)
 
 		e += Δe;
 		if(e > dp.x){
-			p.y += p1.y > p0.y? 1: -1;
+			p.y += Δy;
 			e -= 2*dp.x;
 		}
 	}
+}
+
+void
+triangle(Memimage *dst, Point p0, Point p1, Point p2, Memimage *src)
+{
+	bresenham(dst, p0, p1, src);
+	bresenham(dst, p1, p2, src);
+	bresenham(dst, p2, p0, src);
 }
 
 void
@@ -211,6 +221,7 @@ threadmain(int argc, char *argv[])
 	bresenham(fb, Pt(40,40), Pt(300,300), red);
 	bresenham(fb, Pt(80,80), Pt(100,200), red);
 	bresenham(fb, Pt(80,80), Pt(200,100), red);
+	triangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), red);
 
 	display->locking = 1;
 	unlockdisplay(display);
