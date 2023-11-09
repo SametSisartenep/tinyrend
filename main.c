@@ -8,9 +8,12 @@
 #include <keyboard.h>
 #include <geometry.h>
 
+typedef Point Triangle[3];
+
 
 Memimage *fb;
-Memimage *red;
+Memimage *red, *green, *blue;
+Channel *drawc;
 
 void resized(void);
 
@@ -137,12 +140,60 @@ bresenham(Memimage *dst, Point p0, Point p1, Memimage *src)
 	}
 }
 
+int
+ycoordsort(void *a, void *b)
+{
+	return ((Point*)a)->y - ((Point*)b)->y;
+}
+
 void
 triangle(Memimage *dst, Point p0, Point p1, Point p2, Memimage *src)
 {
-	bresenham(dst, p0, p1, src);
-	bresenham(dst, p1, p2, src);
-	bresenham(dst, p2, p0, src);
+	Triangle t;
+
+	t[0] = p0;
+	t[1] = p1;
+	t[2] = p2;
+
+	qsort(t, nelem(t), sizeof(Point), ycoordsort);
+
+	bresenham(dst, t[0], t[1], src);
+	bresenham(dst, t[1], t[2], src);
+	bresenham(dst, t[2], t[0], green);
+}
+
+void
+filltriangle(Memimage *dst, Point p0, Point p1, Point p2, Memimage *src)
+{
+	int y;
+	double m₀₂, m₀₁, m₁₂;
+	Point dp₀₂, dp₀₁, dp₁₂;
+	Triangle t;
+
+	t[0] = p0;
+	t[1] = p1;
+	t[2] = p2;
+
+	qsort(t, nelem(t), sizeof(Point), ycoordsort);
+
+	dp₀₂ = subpt(t[2], t[0]);
+	m₀₂ = (double)dp₀₂.x/dp₀₂.y;
+	dp₀₁ = subpt(t[1], t[0]);
+	m₀₁ = (double)dp₀₁.x/dp₀₁.y;
+	dp₁₂ = subpt(t[2], t[1]);
+	m₁₂ = (double)dp₁₂.x/dp₁₂.y;
+
+	fprint(2, "%P %P %P\n", t[0], t[1], t[2]);
+	fprint(2, "m₀₂ %g m₀₁ %g m₁₂ %g\n", m₀₂, m₀₁, m₁₂);
+
+	for(y = t[0].y; y <= t[1].y; y++)
+		bresenham(dst, Pt(t[0].x + (y-t[0].y)*m₀₂,y), Pt(t[0].x + (y-t[0].y)*m₀₁,y), src);
+	for(; y <= t[2].y; y++)
+		bresenham(dst, Pt(t[0].x + (y-t[0].y)*m₀₂,y), Pt(t[1].x + (y-t[1].y)*m₁₂,y), src);
+
+	bresenham(dst, t[0], t[1], src);
+	bresenham(dst, t[1], t[2], src);
+	bresenham(dst, t[2], t[0], green);
 }
 
 void
@@ -218,21 +269,28 @@ threadmain(int argc, char *argv[])
 
 	fb = eallocmemimage(screen->r, screen->chan);
 	red = rgb(DRed);
+	green = rgb(DGreen);
+	blue = rgb(DBlue);
 	bresenham(fb, Pt(40,40), Pt(300,300), red);
 	bresenham(fb, Pt(80,80), Pt(100,200), red);
 	bresenham(fb, Pt(80,80), Pt(200,100), red);
-	triangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), red);
+	filltriangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), red);
+	triangle(fb, Pt(300,120), Pt(350,200), Pt(50, 210), red);
+	triangle(fb, Pt(300,130), Pt(350,80), Pt(50, 220), red);
+
+	drawc = chancreate(sizeof(void*), 1);
 
 	display->locking = 1;
 	unlockdisplay(display);
-	redraw();
+	nbsend(drawc, nil);
 
 	for(;;){
-		enum { MOUSE, RESIZE, KEYBOARD };
+		enum { MOUSE, RESIZE, KEYBOARD, DRAW };
 		Alt a[] = {
 			{mc->c, &mc->Mouse, CHANRCV},
 			{mc->resizec, nil, CHANRCV},
 			{kc->c, &r, CHANRCV},
+			{drawc, nil, CHANRCV},
 			{nil, nil, CHANEND}
 		};
 
@@ -246,9 +304,10 @@ threadmain(int argc, char *argv[])
 		case KEYBOARD:
 			key(r);
 			break;
+		case DRAW:
+			redraw();
+			break;
 		}
-
-		redraw();
 	}
 }
 
@@ -259,5 +318,5 @@ resized(void)
 	if(getwindow(display, Refnone) < 0)
 		sysfatal("couldn't resize");
 	unlockdisplay(display);
-	redraw();
+	nbsend(drawc, nil);
 }
