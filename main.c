@@ -16,8 +16,9 @@ Memimage *red, *green, *blue;
 Channel *drawc;
 
 void resized(void);
+uvlong nanosec(void);
 
-void*
+void *
 emalloc(ulong n)
 {
 	void *p;
@@ -29,7 +30,7 @@ emalloc(ulong n)
 	return p;
 }
 
-void*
+void *
 erealloc(void *p, ulong n)
 {
 	void *np;
@@ -47,7 +48,7 @@ erealloc(void *p, ulong n)
 	return np;
 }
 
-Image*
+Image *
 eallocimage(Display *d, Rectangle r, ulong chan, int repl, ulong col)
 {
 	Image *i;
@@ -58,7 +59,7 @@ eallocimage(Display *d, Rectangle r, ulong chan, int repl, ulong col)
 	return i;
 }
 
-Memimage*
+Memimage *
 eallocmemimage(Rectangle r, ulong chan)
 {
 	Memimage *i;
@@ -70,7 +71,19 @@ eallocmemimage(Rectangle r, ulong chan)
 	return i;
 }
 
-Memimage*
+int
+min(int a, int b)
+{
+	return a < b? a: b;
+}
+
+int
+max(int a, int b)
+{
+	return a > b? a: b;
+}
+
+Memimage *
 rgb(ulong c)
 {
 	Memimage *i;
@@ -87,10 +100,12 @@ pixel(Memimage *dst, Point p, Memimage *src)
 {
 	Rectangle r;
 
-	r.min = addpt(dst->r.min, p);
-	r.max = addpt(r.min, Pt(1,1));
+	if(dst == nil || src == nil)
+		return;
 
-	memimagedraw(dst, r, src, ZP, nil, ZP, SoverD);
+	r = rectaddpt(Rect(0,0,1,1), p);
+
+	memimagedraw(dst, rectaddpt(r, dst->r.min), src, ZP, nil, ZP, SoverD);
 }
 
 void
@@ -183,13 +198,51 @@ filltriangle(Memimage *dst, Point p0, Point p1, Point p2, Memimage *src)
 	dp₁₂ = subpt(t[2], t[1]);
 	m₁₂ = (double)dp₁₂.x/dp₁₂.y;
 
-	fprint(2, "%P %P %P\n", t[0], t[1], t[2]);
-	fprint(2, "m₀₂ %g m₀₁ %g m₁₂ %g\n", m₀₂, m₀₁, m₁₂);
-
+	/* first half */
 	for(y = t[0].y; y <= t[1].y; y++)
 		bresenham(dst, Pt(t[0].x + (y-t[0].y)*m₀₂,y), Pt(t[0].x + (y-t[0].y)*m₀₁,y), src);
+	/* second half */
 	for(; y <= t[2].y; y++)
 		bresenham(dst, Pt(t[0].x + (y-t[0].y)*m₀₂,y), Pt(t[1].x + (y-t[1].y)*m₁₂,y), src);
+}
+
+void
+shade(Memimage *dst, Memimage *(*shader)(Point))
+{
+	Point p;
+	Memimage *c;
+
+	p = ZP;
+	for(; p.y < Dy(dst->r); p.y++)
+		for(p.x = 0; p.x < Dx(dst->r); p.x++)
+			if((c = shader(p)) != nil)
+				pixel(dst, p, c);
+}
+
+Memimage *
+triangleshader(Point p)
+{
+	Triangle2 t;
+	Rectangle bbox;
+	Point3 bc;
+
+	t.p0 = Pt2(240,200,1);
+	t.p1 = Pt2(400,40,1);
+	t.p2 = Pt2(240,40,1);
+
+	bbox = Rect(
+		min(min(t.p0.x, t.p1.x), t.p2.x),
+		min(min(t.p0.y, t.p1.y), t.p2.y),
+		max(max(t.p0.x, t.p1.x), t.p2.x),
+		max(max(t.p0.y, t.p1.y), t.p2.y)
+	);
+	if(!ptinrect(p, bbox))
+		return nil;
+
+	bc = barycoords(t, Pt2(p.x,p.y,1));
+	if(bc.x < 0 || bc.y < 0 || bc.z < 0)
+		return nil;
+	return red;
 }
 
 void
@@ -244,6 +297,7 @@ threadmain(int argc, char *argv[])
 	Mousectl *mc;
 	Keyboardctl *kc;
 	Rune r;
+	uvlong t0, t1;
 
 	GEOMfmtinstall();
 	ARGBEGIN{
@@ -267,15 +321,22 @@ threadmain(int argc, char *argv[])
 	red = rgb(DRed);
 	green = rgb(DGreen);
 	blue = rgb(DBlue);
+
 	bresenham(fb, Pt(40,40), Pt(300,300), red);
 	bresenham(fb, Pt(80,80), Pt(100,200), red);
 	bresenham(fb, Pt(80,80), Pt(200,100), red);
+
 	filltriangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), blue);
 	triangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), red);
 	filltriangle(fb, Pt(300,120), Pt(200,350), Pt(50, 210), blue);
 	triangle(fb, Pt(300,120), Pt(200,350), Pt(50, 210), red);
 	filltriangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), blue);
 	triangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), red);
+
+	t0 = nanosec();
+	shade(fb, triangleshader);
+	t1 = nanosec();
+	fprint(2, "shader took %lludns\n", t1-t0);
 
 	drawc = chancreate(sizeof(void*), 1);
 
