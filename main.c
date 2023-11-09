@@ -6,7 +6,7 @@
 #include <memdraw.h>
 #include <mouse.h>
 #include <keyboard.h>
-#include "libgeometry/geometry.h"
+#include <geometry.h>
 
 
 Memimage *fb;
@@ -91,19 +91,47 @@ pixel(Memimage *dst, Point p, Memimage *src)
 }
 
 void
+swap(int *a, int *b)
+{
+	int t;
+
+	t = *a;
+	*a = *b;
+	*b = t;
+}
+
+void
 bresenham(Memimage *dst, Point p0, Point p1, Memimage *src)
 {
-	double t, dt;
-	Point p;
+	int steep = 0;
+	double t;
+	Point p, dp;
 
-	dt = 0.01;
+	if(abs(p0.x-p1.x) < abs(p0.y-p1.y)){
+		steep = 1;
+		swap(&p0.x, &p0.y);
+		swap(&p1.x, &p1.y);
+	}
 
-	for(t = 0; t < 1; t += dt){
-		p = Pt(
-			flerp(p0.x, p1.x, t),
-			flerp(p0.y, p1.y, t)
-		);
+	/* make them left-to-right */
+	if(p0.x > p1.x){
+		swap(&p0.x, &p1.x);
+		swap(&p0.y, &p1.y);
+	}
+
+	dp = subpt(p1, p0);
+
+	for(p = p0; p.x <= p1.x; p.x++){
+		t = (double)(p.x-p0.x)/(p1.x-p0.x);
+		p.y = flerp(p0.y, p1.y, t);
+
+		if(steep)
+			swap(&p.x, &p.y);
+
 		pixel(dst, p, src);
+
+		if(steep)
+			swap(&p.x, &p.y);
 	}
 }
 
@@ -181,6 +209,8 @@ threadmain(int argc, char *argv[])
 	fb = eallocmemimage(screen->r, screen->chan);
 	red = rgb(DRed);
 	bresenham(fb, Pt(40,40), Pt(300,300), red);
+	bresenham(fb, Pt(80,80), Pt(100,200), red);
+	bresenham(fb, Pt(80,80), Pt(200,100), red);
 
 	display->locking = 1;
 	unlockdisplay(display);
