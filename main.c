@@ -103,8 +103,7 @@ swap(int *a, int *b)
 void
 bresenham(Memimage *dst, Point p0, Point p1, Memimage *src)
 {
-	int steep = 0;
-	double t;
+	int steep = 0, Δe, e;
 	Point p, dp;
 
 	if(abs(p0.x-p1.x) < abs(p0.y-p1.y)){
@@ -120,18 +119,19 @@ bresenham(Memimage *dst, Point p0, Point p1, Memimage *src)
 	}
 
 	dp = subpt(p1, p0);
+	Δe = 2*abs(dp.y);
+	e = 0;
 
 	for(p = p0; p.x <= p1.x; p.x++){
-		t = (double)(p.x-p0.x)/(p1.x-p0.x);
-		p.y = flerp(p0.y, p1.y, t);
-
-		if(steep)
-			swap(&p.x, &p.y);
-
+		if(steep) swap(&p.x, &p.y);
 		pixel(dst, p, src);
+		if(steep) swap(&p.x, &p.y);
 
-		if(steep)
-			swap(&p.x, &p.y);
+		e += Δe;
+		if(e > dp.x){
+			p.y += p1.y > p0.y? 1: -1;
+			e -= 2*dp.x;
+		}
 	}
 }
 
