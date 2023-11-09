@@ -207,14 +207,14 @@ filltriangle(Memimage *dst, Point p0, Point p1, Point p2, Memimage *src)
 }
 
 void
-shade(Memimage *dst, Memimage *(*shader)(Point))
+shade(Memimage *dst, Rectangle r, Memimage *(*shader)(Point))
 {
 	Point p;
 	Memimage *c;
 
-	p = ZP;
-	for(; p.y < Dy(dst->r); p.y++)
-		for(p.x = 0; p.x < Dx(dst->r); p.x++)
+	p = r.min;
+	for(; p.y < r.max.y; p.y++)
+		for(p.x = 0; p.x < r.max.x; p.x++)
 			if((c = shader(p)) != nil)
 				pixel(dst, p, c);
 }
@@ -231,10 +231,8 @@ triangleshader(Point p)
 	t.p2 = Pt2(240,40,1);
 
 	bbox = Rect(
-		min(min(t.p0.x, t.p1.x), t.p2.x),
-		min(min(t.p0.y, t.p1.y), t.p2.y),
-		max(max(t.p0.x, t.p1.x), t.p2.x),
-		max(max(t.p0.y, t.p1.y), t.p2.y)
+		min(min(t.p0.x, t.p1.x), t.p2.x), min(min(t.p0.y, t.p1.y), t.p2.y),
+		max(max(t.p0.x, t.p1.x), t.p2.x), max(max(t.p0.y, t.p1.y), t.p2.y)
 	);
 	if(!ptinrect(p, bbox))
 		return nil;
@@ -250,7 +248,7 @@ redraw(void)
 {
 	lockdisplay(display);
 	draw(screen, screen->r, display->black, nil, ZP);
-	loadimage(screen, screen->r, byteaddr(fb, fb->r.min), bytesperline(fb->r, fb->depth)*Dy(fb->r));
+	loadimage(screen, fb->r, byteaddr(fb, fb->r.min), bytesperline(fb->r, fb->depth)*Dy(fb->r));
 	flushimage(display, 1);
 	unlockdisplay(display);
 }
@@ -334,7 +332,7 @@ threadmain(int argc, char *argv[])
 	triangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), red);
 
 	t0 = nanosec();
-	shade(fb, triangleshader);
+	shade(fb, rectsubpt(fb->r, fb->r.min), triangleshader);
 	t1 = nanosec();
 	fprint(2, "shader took %lludns\n", t1-t0);
 
