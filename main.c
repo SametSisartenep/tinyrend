@@ -190,10 +190,6 @@ filltriangle(Memimage *dst, Point p0, Point p1, Point p2, Memimage *src)
 		bresenham(dst, Pt(t[0].x + (y-t[0].y)*m₀₂,y), Pt(t[0].x + (y-t[0].y)*m₀₁,y), src);
 	for(; y <= t[2].y; y++)
 		bresenham(dst, Pt(t[0].x + (y-t[0].y)*m₀₂,y), Pt(t[1].x + (y-t[1].y)*m₁₂,y), src);
-
-	bresenham(dst, t[0], t[1], src);
-	bresenham(dst, t[1], t[2], src);
-	bresenham(dst, t[2], t[0], green);
 }
 
 void
@@ -274,9 +270,12 @@ threadmain(int argc, char *argv[])
 	bresenham(fb, Pt(40,40), Pt(300,300), red);
 	bresenham(fb, Pt(80,80), Pt(100,200), red);
 	bresenham(fb, Pt(80,80), Pt(200,100), red);
-	filltriangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), red);
-	triangle(fb, Pt(300,120), Pt(350,200), Pt(50, 210), red);
-	triangle(fb, Pt(300,130), Pt(350,80), Pt(50, 220), red);
+	filltriangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), blue);
+	triangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), red);
+	filltriangle(fb, Pt(300,120), Pt(200,350), Pt(50, 210), blue);
+	triangle(fb, Pt(300,120), Pt(200,350), Pt(50, 210), red);
+	filltriangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), blue);
+	triangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), red);
 
 	drawc = chancreate(sizeof(void*), 1);
 
