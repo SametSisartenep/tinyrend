@@ -13,6 +13,7 @@ typedef Point Triangle[3];
 
 Memimage *fb;
 Memimage *red, *green, *blue;
+Memimage *frag;
 Channel *drawc;
 
 void resized(void);
@@ -98,14 +99,10 @@ rgb(ulong c)
 void
 pixel(Memimage *dst, Point p, Memimage *src)
 {
-	Rectangle r;
-
 	if(dst == nil || src == nil)
 		return;
 
-	r = rectaddpt(Rect(0,0,1,1), p);
-
-	memimagedraw(dst, rectaddpt(r, dst->r.min), src, ZP, nil, ZP, SoverD);
+	memimagedraw(dst, rectaddpt(Rect(0,0,1,1), p), src, ZP, nil, ZP, SoverD);
 }
 
 void
@@ -245,8 +242,8 @@ triangleshader(Point p)
 	cbuf[1] = 0xFF*bc.z;
 	cbuf[2] = 0xFF*bc.y;
 	cbuf[3] = 0xFF*bc.x;
-	memfillcolor(red, *(ulong*)cbuf);
-	return red;
+	memfillcolor(frag, *(ulong*)cbuf);
+	return frag;
 }
 
 Memimage *
@@ -266,11 +263,11 @@ circleshader(Point p)
 
 	cbuf[0] = 0xFF;
 	cbuf[1] = 0;
-	cbuf[2] = 0xFF*uv.x;
-	cbuf[3] = 0xFF*uv.y;
+	cbuf[2] = 0xFF*uv.y;
+	cbuf[3] = 0xFF*uv.x;
 
-	memfillcolor(red, *(ulong*)cbuf);
-	return red;
+	memfillcolor(frag, *(ulong*)cbuf);
+	return frag;
 }
 
 void
@@ -278,7 +275,7 @@ redraw(void)
 {
 	lockdisplay(display);
 	draw(screen, screen->r, display->black, nil, ZP);
-	loadimage(screen, fb->r, byteaddr(fb, fb->r.min), bytesperline(fb->r, fb->depth)*Dy(fb->r));
+	loadimage(screen, rectaddpt(fb->r, screen->r.min), byteaddr(fb, fb->r.min), bytesperline(fb->r, fb->depth)*Dy(fb->r));
 	flushimage(display, 1);
 	unlockdisplay(display);
 }
@@ -345,13 +342,14 @@ threadmain(int argc, char *argv[])
 	if((kc = initkeyboard(nil)) == nil)
 		sysfatal("initkeyboard: %r");
 
-	fb = eallocmemimage(screen->r, screen->chan);
+	fb = eallocmemimage(rectsubpt(screen->r, screen->r.min), screen->chan);
 	red = rgb(DRed);
 	green = rgb(DGreen);
 	blue = rgb(DBlue);
+	frag = rgb(DBlack);
 
 	t0 = nanosec();
-	shade(fb, rectsubpt(fb->r, fb->r.min), circleshader);
+	shade(fb, fb->r, circleshader);
 	t1 = nanosec();
 	fprint(2, "shader took %lludns\n", t1-t0);
 
@@ -367,7 +365,7 @@ threadmain(int argc, char *argv[])
 	triangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), red);
 
 	t0 = nanosec();
-	shade(fb, rectsubpt(fb->r, fb->r.min), triangleshader);
+	shade(fb, fb->r, triangleshader);
 	t1 = nanosec();
 	fprint(2, "shader took %lludns\n", t1-t0);
 
