@@ -9,12 +9,31 @@
 #include <geometry.h>
 
 typedef Point Triangle[3];
+typedef struct Sparams Sparams;
+typedef struct SUparams SUparams;
+
+/* shader params */
+struct Sparams
+{
+	Memimage *frag;
+	Point p;
+};
+
+/* shader unit params */
+struct SUparams
+{
+	Memimage *dst;
+	Rectangle r;
+	int id;
+	Channel *donec;
+	Memimage *(*shader)(Sparams*);
+};
 
 
 Memimage *fb;
 Memimage *red, *green, *blue;
-Memimage *frag;
 Channel *drawc;
+int nprocs;
 
 void resized(void);
 uvlong nanosec(void);
@@ -204,19 +223,60 @@ filltriangle(Memimage *dst, Point p0, Point p1, Point p2, Memimage *src)
 }
 
 void
-shade(Memimage *dst, Rectangle r, Memimage *(*shader)(Point))
+shaderunit(void *arg)
 {
+	SUparams *params;
+	Sparams sp;
 	Point p;
 	Memimage *c;
 
-	for(p.y = r.min.y; p.y < r.max.y; p.y++)
-		for(p.x = r.min.x; p.x < r.max.x; p.x++)
-			if((c = shader(p)) != nil)
-				pixel(dst, p, c);
+	params = arg;
+	sp.frag = rgb(DBlack);
+
+	for(p.y = params->r.min.y; p.y < params->r.max.y; p.y++)
+		for(p.x = params->r.min.x; p.x < params->r.max.x; p.x++){
+			sp.p = p;
+			if((c = params->shader(&sp)) != nil)
+				pixel(params->dst, p, c);
+		}
+
+	freememimage(sp.frag);
+	sendp(params->donec, nil);
+	free(params);
+	threadexits(nil);
+}
+
+void
+shade(Memimage *dst, Memimage *(*shader)(Sparams*))
+{
+	int i;
+	Point dim;
+	SUparams *params;
+	Channel *donec;
+
+	/* shitty approach until i find a better algo */
+	dim.x = Dx(dst->r)/nprocs;
+
+	donec = chancreate(sizeof(void*), 0);
+
+	for(i = 0; i < nprocs; i++){
+		params = emalloc(sizeof *params);
+		params->dst = dst;
+		params->r = Rect(i*dim.x,0,min((i+1)*dim.x, dst->r.max.x),dst->r.max.y);
+		params->id = i;
+		params->donec = donec;
+		params->shader = shader;
+		proccreate(shaderunit, params, mainstacksize);
+		fprint(2, "spawned su %d for %R\n", params->id, params->r);
+	}
+
+	while(i--)
+		recvp(donec);
+	chanfree(donec);
 }
 
 Memimage *
-triangleshader(Point p)
+triangleshader(Sparams *sp)
 {
 	Triangle2 t;
 	Rectangle bbox;
@@ -231,10 +291,10 @@ triangleshader(Point p)
 		min(min(t.p0.x, t.p1.x), t.p2.x), min(min(t.p0.y, t.p1.y), t.p2.y),
 		max(max(t.p0.x, t.p1.x), t.p2.x), max(max(t.p0.y, t.p1.y), t.p2.y)
 	);
-	if(!ptinrect(p, bbox))
+	if(!ptinrect(sp->p, bbox))
 		return nil;
 
-	bc = barycoords(t, Pt2(p.x,p.y,1));
+	bc = barycoords(t, Pt2(sp->p.x,sp->p.y,1));
 	if(bc.x < 0 || bc.y < 0 || bc.z < 0)
 		return nil;
 
@@ -242,18 +302,18 @@ triangleshader(Point p)
 	cbuf[1] = 0xFF*bc.z;
 	cbuf[2] = 0xFF*bc.y;
 	cbuf[3] = 0xFF*bc.x;
-	memfillcolor(frag, *(ulong*)cbuf);
-	return frag;
+	memfillcolor(sp->frag, *(ulong*)cbuf);
+	return sp->frag;
 }
 
 Memimage *
-circleshader(Point p)
+circleshader(Sparams *sp)
 {
 	Point2 uv;
 	double r;
 	uchar cbuf[4];
 
-	uv = Pt2(p.x,p.y,1);
+	uv = Pt2(sp->p.x,sp->p.y,1);
 	uv.x /= Dx(fb->r);
 	uv.y /= Dy(fb->r);
 	r = 0.3;
@@ -266,8 +326,8 @@ circleshader(Point p)
 	cbuf[2] = 0xFF*uv.y;
 	cbuf[3] = 0xFF*uv.x;
 
-	memfillcolor(frag, *(ulong*)cbuf);
-	return frag;
+	memfillcolor(sp->frag, *(ulong*)cbuf);
+	return sp->frag;
 }
 
 void
@@ -312,7 +372,7 @@ key(Rune r)
 void
 usage(void)
 {
-	fprint(2, "usage: %s\n", argv0);
+	fprint(2, "usage: %s [-n nprocs]\n", argv0);
 	exits("usage");
 }
 
@@ -326,10 +386,16 @@ threadmain(int argc, char *argv[])
 
 	GEOMfmtinstall();
 	ARGBEGIN{
+	case 'n':
+		nprocs = strtoul(EARGF(usage()), nil, 10);
+		break;
 	default: usage();
 	}ARGEND;
-	if(argc > 0)
+	if(argc != 0)
 		usage();
+
+	if(nprocs < 1)
+		nprocs = strtoul(getenv("NPROC"), nil, 10);
 
 	if(newwindow(nil) < 0)
 		sysfatal("newwindow: %r");
@@ -349,7 +415,7 @@ threadmain(int argc, char *argv[])
 	frag = rgb(DBlack);
 
 	t0 = nanosec();
-	shade(fb, fb->r, circleshader);
+	shade(fb, circleshader);
 	t1 = nanosec();
 	fprint(2, "shader took %lludns\n", t1-t0);
 
@@ -365,7 +431,7 @@ threadmain(int argc, char *argv[])
 	triangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), red);
 
 	t0 = nanosec();
-	shade(fb, fb->r, triangleshader);
+	shade(fb, triangleshader);
 	t1 = nanosec();
 	fprint(2, "shader took %lludns\n", t1-t0);
 
