@@ -212,9 +212,8 @@ shade(Memimage *dst, Rectangle r, Memimage *(*shader)(Point))
 	Point p;
 	Memimage *c;
 
-	p = r.min;
-	for(; p.y < r.max.y; p.y++)
-		for(p.x = 0; p.x < r.max.x; p.x++)
+	for(p.y = r.min.y; p.y < r.max.y; p.y++)
+		for(p.x = r.min.x; p.x < r.max.x; p.x++)
 			if((c = shader(p)) != nil)
 				pixel(dst, p, c);
 }
@@ -225,6 +224,7 @@ triangleshader(Point p)
 	Triangle2 t;
 	Rectangle bbox;
 	Point3 bc;
+	uchar cbuf[4];
 
 	t.p0 = Pt2(240,200,1);
 	t.p1 = Pt2(400,40,1);
@@ -240,6 +240,36 @@ triangleshader(Point p)
 	bc = barycoords(t, Pt2(p.x,p.y,1));
 	if(bc.x < 0 || bc.y < 0 || bc.z < 0)
 		return nil;
+
+	cbuf[0] = 0xFF;
+	cbuf[1] = 0xFF*bc.z;
+	cbuf[2] = 0xFF*bc.y;
+	cbuf[3] = 0xFF*bc.x;
+	memfillcolor(red, *(ulong*)cbuf);
+	return red;
+}
+
+Memimage *
+circleshader(Point p)
+{
+	Point2 uv;
+	double r;
+	uchar cbuf[4];
+
+	uv = Pt2(p.x,p.y,1);
+	uv.x /= Dx(fb->r);
+	uv.y /= Dy(fb->r);
+	r = 0.3;
+
+	if(vec2len(subpt2(uv, Vec2(0.5,0.5))) > r)
+		return nil;
+
+	cbuf[0] = 0xFF;
+	cbuf[1] = 0;
+	cbuf[2] = 0xFF*uv.x;
+	cbuf[3] = 0xFF*uv.y;
+
+	memfillcolor(red, *(ulong*)cbuf);
 	return red;
 }
 
@@ -320,6 +350,11 @@ threadmain(int argc, char *argv[])
 	green = rgb(DGreen);
 	blue = rgb(DBlue);
 
+	t0 = nanosec();
+	shade(fb, rectsubpt(fb->r, fb->r.min), circleshader);
+	t1 = nanosec();
+	fprint(2, "shader took %lludns\n", t1-t0);
+
 	bresenham(fb, Pt(40,40), Pt(300,300), red);
 	bresenham(fb, Pt(80,80), Pt(100,200), red);
 	bresenham(fb, Pt(80,80), Pt(200,100), red);
@@ -337,7 +372,6 @@ threadmain(int argc, char *argv[])
 	fprint(2, "shader took %lludns\n", t1-t0);
 
 	drawc = chancreate(sizeof(void*), 1);
-
 	display->locking = 1;
 	unlockdisplay(display);
 	nbsend(drawc, nil);
