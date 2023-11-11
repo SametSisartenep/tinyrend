@@ -7,6 +7,7 @@
 #include <mouse.h>
 #include <keyboard.h>
 #include <geometry.h>
+#include "libobj/obj.h"
 
 typedef Point Triangle[3];
 typedef struct Sparams Sparams;
@@ -32,6 +33,7 @@ struct SUparams
 
 Memimage *fb;
 Memimage *red, *green, *blue;
+OBJ *model;
 Channel *drawc;
 int nprocs;
 
@@ -208,11 +210,11 @@ filltriangle(Memimage *dst, Point p0, Point p1, Point p2, Memimage *src)
 	qsort(t, nelem(t), sizeof(Point), ycoordsort);
 
 	dp₀₂ = subpt(t[2], t[0]);
-	m₀₂ = (double)dp₀₂.x/dp₀₂.y;
+	m₀₂ = dp₀₂.y == 0? 0: (double)dp₀₂.x/dp₀₂.y;
 	dp₀₁ = subpt(t[1], t[0]);
-	m₀₁ = (double)dp₀₁.x/dp₀₁.y;
+	m₀₁ = dp₀₁.y == 0? 0: (double)dp₀₁.x/dp₀₁.y;
 	dp₁₂ = subpt(t[2], t[1]);
-	m₁₂ = (double)dp₁₂.x/dp₁₂.y;
+	m₁₂ = dp₁₂.y == 0? 0: (double)dp₁₂.x/dp₁₂.y;
 
 	/* first half */
 	for(y = t[0].y; y <= t[1].y; y++)
@@ -330,6 +332,91 @@ circleshader(Sparams *sp)
 	return sp->frag;
 }
 
+Memimage *
+modelshader(Sparams *sp)
+{
+	OBJObject *o;
+	OBJElem *e;
+	OBJVertex *verts;
+	Triangle3 t;
+	Triangle2 st;
+	Point3 bc;
+	int i;
+	uchar cbuf[4];
+
+	verts = model->vertdata[OBJVGeometric].verts;
+
+	for(i = 0; i < nelem(model->objtab); i++)
+		for(o = model->objtab[i]; o != nil; o = o->next)
+			for(e = o->child; e != nil; e = e->next){
+				/* discard non-triangles */
+				if(e->type != OBJEFace || e->nindex != 3)
+					continue;
+
+				t.p0 = Pt3(verts[e->indices[0]].x,verts[e->indices[0]].y,verts[e->indices[0]].z,verts[e->indices[0]].w);
+				t.p1 = Pt3(verts[e->indices[1]].x,verts[e->indices[1]].y,verts[e->indices[1]].z,verts[e->indices[1]].w);
+				t.p2 = Pt3(verts[e->indices[2]].x,verts[e->indices[2]].y,verts[e->indices[2]].z,verts[e->indices[2]].w);
+
+				st.p0 = Pt2((t.p0.x+1)*Dx(fb->r)/2, (t.p0.y+1)*Dy(fb->r)/2, 1);
+				st.p1 = Pt2((t.p1.x+1)*Dx(fb->r)/2, (t.p1.y+1)*Dy(fb->r)/2, 1);
+				st.p2 = Pt2((t.p2.x+1)*Dx(fb->r)/2, (t.p2.y+1)*Dy(fb->r)/2, 1);
+
+				bc = barycoords(st, Pt2(sp->p.x,sp->p.y,1));
+				if(bc.x < 0 || bc.y < 0 || bc.z < 0)
+					continue;
+
+				cbuf[0] = 0xFF;
+				cbuf[1] = 0xFF*bc.x;
+				cbuf[2] = 0xFF*bc.y;
+				cbuf[3] = 0xFF*bc.z;
+
+				memfillcolor(sp->frag, *(ulong*)cbuf);
+				return sp->frag;
+			}
+	return nil;
+}
+
+void
+drawmodel(Memimage *dst)
+{
+	OBJObject *o;
+	OBJElem *e;
+	OBJVertex *verts;
+	Triangle3 t;
+	Triangle st;
+	int i;
+	uchar cbuf[4];
+
+	verts = model->vertdata[OBJVGeometric].verts;
+
+	for(i = 0; i < nelem(model->objtab); i++)
+		for(o = model->objtab[i]; o != nil; o = o->next)
+			for(e = o->child; e != nil; e = e->next){
+				/* discard non-triangles */
+				if(e->type != OBJEFace || e->nindex != 3)
+					continue;
+
+				t.p0 = Pt3(verts[e->indices[0]].x,verts[e->indices[0]].y,verts[e->indices[0]].z,verts[e->indices[0]].w);
+				t.p1 = Pt3(verts[e->indices[1]].x,verts[e->indices[1]].y,verts[e->indices[1]].z,verts[e->indices[1]].w);
+				t.p2 = Pt3(verts[e->indices[2]].x,verts[e->indices[2]].y,verts[e->indices[2]].z,verts[e->indices[2]].w);
+
+				st[0] = Pt((t.p0.x+1)*Dx(fb->r)/2, (t.p0.y+1)*Dy(fb->r)/2);
+				st[1] = Pt((t.p1.x+1)*Dx(fb->r)/2, (t.p1.y+1)*Dy(fb->r)/2);
+				st[2] = Pt((t.p2.x+1)*Dx(fb->r)/2, (t.p2.y+1)*Dy(fb->r)/2);
+
+				/* discard degenerates */
+				if(eqpt(st[0], st[1]) || eqpt(st[1], st[2]) || eqpt(st[2], st[0]))
+					continue;
+
+				cbuf[0] = 0xFF;
+				cbuf[1] = 0xFF*frand();
+				cbuf[2] = 0xFF*frand();
+				cbuf[3] = 0xFF*frand();
+
+				filltriangle(dst, st[0], st[1], st[2], rgb(*(ulong*)cbuf));
+			}
+}
+
 void
 redraw(void)
 {
@@ -372,7 +459,7 @@ key(Rune r)
 void
 usage(void)
 {
-	fprint(2, "usage: %s [-n nprocs]\n", argv0);
+	fprint(2, "usage: %s [-n nprocs] [-m objfile]\n", argv0);
 	exits("usage");
 }
 
@@ -383,11 +470,16 @@ threadmain(int argc, char *argv[])
 	Keyboardctl *kc;
 	Rune r;
 	uvlong t0, t1;
+	char *mdlpath;
 
 	GEOMfmtinstall();
+	mdlpath = nil;
 	ARGBEGIN{
 	case 'n':
 		nprocs = strtoul(EARGF(usage()), nil, 10);
+		break;
+	case 'm':
+		mdlpath = EARGF(usage());
 		break;
 	default: usage();
 	}ARGEND;
@@ -412,28 +504,42 @@ threadmain(int argc, char *argv[])
 	red = rgb(DRed);
 	green = rgb(DGreen);
 	blue = rgb(DBlue);
-	frag = rgb(DBlack);
 
-	t0 = nanosec();
-	shade(fb, circleshader);
-	t1 = nanosec();
-	fprint(2, "shader took %lludns\n", t1-t0);
+	if(mdlpath != nil){
+		model = objparse(mdlpath);
+		if(model == nil)
+			sysfatal("objparse: %r");
 
-	bresenham(fb, Pt(40,40), Pt(300,300), red);
-	bresenham(fb, Pt(80,80), Pt(100,200), red);
-	bresenham(fb, Pt(80,80), Pt(200,100), red);
+//		t0 = nanosec();
+//		shade(fb, modelshader);
+//		t1 = nanosec();
+//		fprint(2, "shader took %lludns\n", t1-t0);
 
-	filltriangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), blue);
-	triangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), red);
-	filltriangle(fb, Pt(300,120), Pt(200,350), Pt(50, 210), blue);
-	triangle(fb, Pt(300,120), Pt(200,350), Pt(50, 210), red);
-	filltriangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), blue);
-	triangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), red);
+		drawmodel(fb);
 
-	t0 = nanosec();
-	shade(fb, triangleshader);
-	t1 = nanosec();
-	fprint(2, "shader took %lludns\n", t1-t0);
+		objfree(model);
+	}else{
+		t0 = nanosec();
+		shade(fb, circleshader);
+		t1 = nanosec();
+		fprint(2, "shader took %lludns\n", t1-t0);
+	
+		bresenham(fb, Pt(40,40), Pt(300,300), red);
+		bresenham(fb, Pt(80,80), Pt(100,200), red);
+		bresenham(fb, Pt(80,80), Pt(200,100), red);
+	
+		filltriangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), blue);
+		triangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), red);
+		filltriangle(fb, Pt(300,120), Pt(200,350), Pt(50, 210), blue);
+		triangle(fb, Pt(300,120), Pt(200,350), Pt(50, 210), red);
+		filltriangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), blue);
+		triangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), red);
+	
+		t0 = nanosec();
+		shade(fb, triangleshader);
+		t1 = nanosec();
+		fprint(2, "shader took %lludns\n", t1-t0);
+	}
 
 	drawc = chancreate(sizeof(void*), 1);
 	display->locking = 1;
