@@ -346,6 +346,9 @@ modelshader(Sparams *sp)
 	Point3 bc;
 	int i;
 	uchar cbuf[4];
+	static Point3 light = {0,0,-1,1}; /* global point light */
+	Point3 n;
+	double intensity;
 
 	verts = model->vertdata[OBJVGeometric].verts;
 
@@ -370,10 +373,16 @@ modelshader(Sparams *sp)
 				if(bc.x < 0 || bc.y < 0 || bc.z < 0)
 					continue;
 
+				n = normvec3(crossvec3(subpt3(t.p2, t.p0), subpt3(t.p1, t.p0)));
+				intensity = dotvec3(n, light);
+				/* back-face culling */
+				if(intensity < 0)
+					continue;
+
 				cbuf[0] = 0xFF;
-				cbuf[1] = 0xFF*bc.x;
-				cbuf[2] = 0xFF*bc.y;
-				cbuf[3] = 0xFF*bc.z;
+				cbuf[1] = 0xFF*intensity;
+				cbuf[2] = 0xFF*intensity;
+				cbuf[3] = 0xFF*intensity;
 
 				memfillcolor(sp->frag, *(ulong*)cbuf);
 				return sp->frag;
@@ -392,6 +401,9 @@ drawmodel(Memimage *dst)
 	Triangle st;
 	int i;
 	uchar cbuf[4];
+	static Point3 light = {0,0,-1,1}; /* global point light */
+	Point3 n;
+	double intensity;
 
 	verts = model->vertdata[OBJVGeometric].verts;
 
@@ -416,10 +428,16 @@ drawmodel(Memimage *dst)
 				if(eqpt(st[0], st[1]) || eqpt(st[1], st[2]) || eqpt(st[2], st[0]))
 					continue;
 
+				n = normvec3(crossvec3(subpt3(t.p2, t.p0), subpt3(t.p1, t.p0)));
+				intensity = dotvec3(n, light);
+				/* back-face culling */
+				if(intensity < 0)
+					continue;
+
 				cbuf[0] = 0xFF;
-				cbuf[1] = 0xFF*frand();
-				cbuf[2] = 0xFF*frand();
-				cbuf[3] = 0xFF*frand();
+				cbuf[1] = 0xFF*intensity;
+				cbuf[2] = 0xFF*intensity;
+				cbuf[3] = 0xFF*intensity;
 
 				filltriangle(dst, st[0], st[1], st[2], rgb(*(ulong*)cbuf));
 			}
@@ -537,7 +555,7 @@ threadmain(int argc, char *argv[])
 
 	if(newwindow(nil) < 0)
 		sysfatal("newwindow: %r");
-	if(initdraw(nil, nil, nil) < 0)
+	if(initdraw(nil, nil, "tinyrend") < 0)
 		sysfatal("initdraw: %r");
 	if(memimageinit() != 0)
 		sysfatal("memimageinit: %r");
