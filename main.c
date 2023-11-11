@@ -235,6 +235,8 @@ shaderunit(void *arg)
 	params = arg;
 	sp.frag = rgb(DBlack);
 
+	threadsetname("shader unit #%d", params->id);
+
 	for(p.y = params->r.min.y; p.y < params->r.max.y; p.y++)
 		for(p.x = params->r.min.x; p.x < params->r.max.x; p.x++){
 			sp.p = p;
@@ -338,6 +340,7 @@ modelshader(Sparams *sp)
 	OBJObject *o;
 	OBJElem *e;
 	OBJVertex *verts;
+	OBJIndexArray *idxtab;
 	Triangle3 t;
 	Triangle2 st;
 	Point3 bc;
@@ -349,13 +352,15 @@ modelshader(Sparams *sp)
 	for(i = 0; i < nelem(model->objtab); i++)
 		for(o = model->objtab[i]; o != nil; o = o->next)
 			for(e = o->child; e != nil; e = e->next){
+				idxtab = &e->indextab[OBJVGeometric];
+
 				/* discard non-triangles */
-				if(e->type != OBJEFace || e->nindex != 3)
+				if(e->type != OBJEFace || idxtab->nindex != 3)
 					continue;
 
-				t.p0 = Pt3(verts[e->indices[0]].x,verts[e->indices[0]].y,verts[e->indices[0]].z,verts[e->indices[0]].w);
-				t.p1 = Pt3(verts[e->indices[1]].x,verts[e->indices[1]].y,verts[e->indices[1]].z,verts[e->indices[1]].w);
-				t.p2 = Pt3(verts[e->indices[2]].x,verts[e->indices[2]].y,verts[e->indices[2]].z,verts[e->indices[2]].w);
+				t.p0 = Pt3(verts[idxtab->indices[0]].x,verts[idxtab->indices[0]].y,verts[idxtab->indices[0]].z,verts[idxtab->indices[0]].w);
+				t.p1 = Pt3(verts[idxtab->indices[1]].x,verts[idxtab->indices[1]].y,verts[idxtab->indices[1]].z,verts[idxtab->indices[1]].w);
+				t.p2 = Pt3(verts[idxtab->indices[2]].x,verts[idxtab->indices[2]].y,verts[idxtab->indices[2]].z,verts[idxtab->indices[2]].w);
 
 				st.p0 = Pt2((t.p0.x+1)*Dx(fb->r)/2, (t.p0.y+1)*Dy(fb->r)/2, 1);
 				st.p1 = Pt2((t.p1.x+1)*Dx(fb->r)/2, (t.p1.y+1)*Dy(fb->r)/2, 1);
@@ -382,6 +387,7 @@ drawmodel(Memimage *dst)
 	OBJObject *o;
 	OBJElem *e;
 	OBJVertex *verts;
+	OBJIndexArray *idxtab;
 	Triangle3 t;
 	Triangle st;
 	int i;
@@ -392,13 +398,15 @@ drawmodel(Memimage *dst)
 	for(i = 0; i < nelem(model->objtab); i++)
 		for(o = model->objtab[i]; o != nil; o = o->next)
 			for(e = o->child; e != nil; e = e->next){
+				idxtab = &e->indextab[OBJVGeometric];
+
 				/* discard non-triangles */
-				if(e->type != OBJEFace || e->nindex != 3)
+				if(e->type != OBJEFace || idxtab->nindex != 3)
 					continue;
 
-				t.p0 = Pt3(verts[e->indices[0]].x,verts[e->indices[0]].y,verts[e->indices[0]].z,verts[e->indices[0]].w);
-				t.p1 = Pt3(verts[e->indices[1]].x,verts[e->indices[1]].y,verts[e->indices[1]].z,verts[e->indices[1]].w);
-				t.p2 = Pt3(verts[e->indices[2]].x,verts[e->indices[2]].y,verts[e->indices[2]].z,verts[e->indices[2]].w);
+				t.p0 = Pt3(verts[idxtab->indices[0]].x,verts[idxtab->indices[0]].y,verts[idxtab->indices[0]].z,verts[idxtab->indices[0]].w);
+				t.p1 = Pt3(verts[idxtab->indices[1]].x,verts[idxtab->indices[1]].y,verts[idxtab->indices[1]].z,verts[idxtab->indices[1]].w);
+				t.p2 = Pt3(verts[idxtab->indices[2]].x,verts[idxtab->indices[2]].y,verts[idxtab->indices[2]].z,verts[idxtab->indices[2]].w);
 
 				st[0] = Pt((t.p0.x+1)*Dx(fb->r)/2, (t.p0.y+1)*Dy(fb->r)/2);
 				st[1] = Pt((t.p1.x+1)*Dx(fb->r)/2, (t.p1.y+1)*Dy(fb->r)/2);
@@ -425,6 +433,45 @@ redraw(void)
 	loadimage(screen, rectaddpt(fb->r, screen->r.min), byteaddr(fb, fb->r.min), bytesperline(fb->r, fb->depth)*Dy(fb->r));
 	flushimage(display, 1);
 	unlockdisplay(display);
+}
+
+void
+render(void)
+{
+	uvlong t0, t1;
+
+	if(model != nil){
+//		t0 = nanosec();
+//		shade(fb, modelshader);
+//		t1 = nanosec();
+//		fprint(2, "shader took %lludns\n", t1-t0);
+
+		t0 = nanosec();
+		drawmodel(fb);
+		t1 = nanosec();
+		fprint(2, "drawmodel took %lludns\n", t1-t0);
+	}else{
+		t0 = nanosec();
+		shade(fb, circleshader);
+		t1 = nanosec();
+		fprint(2, "shader took %lludns\n", t1-t0);
+
+		bresenham(fb, Pt(40,40), Pt(300,300), red);
+		bresenham(fb, Pt(80,80), Pt(100,200), red);
+		bresenham(fb, Pt(80,80), Pt(200,100), red);
+
+		filltriangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), blue);
+		triangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), red);
+		filltriangle(fb, Pt(300,120), Pt(200,350), Pt(50, 210), blue);
+		triangle(fb, Pt(300,120), Pt(200,350), Pt(50, 210), red);
+		filltriangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), blue);
+		triangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), red);
+
+		t0 = nanosec();
+		shade(fb, triangleshader);
+		t1 = nanosec();
+		fprint(2, "shader took %lludns\n", t1-t0);
+	}
 }
 
 void
@@ -469,7 +516,6 @@ threadmain(int argc, char *argv[])
 	Mousectl *mc;
 	Keyboardctl *kc;
 	Rune r;
-	uvlong t0, t1;
 	char *mdlpath;
 
 	GEOMfmtinstall();
@@ -509,37 +555,9 @@ threadmain(int argc, char *argv[])
 		model = objparse(mdlpath);
 		if(model == nil)
 			sysfatal("objparse: %r");
-
-//		t0 = nanosec();
-//		shade(fb, modelshader);
-//		t1 = nanosec();
-//		fprint(2, "shader took %lludns\n", t1-t0);
-
-		drawmodel(fb);
-
-		objfree(model);
-	}else{
-		t0 = nanosec();
-		shade(fb, circleshader);
-		t1 = nanosec();
-		fprint(2, "shader took %lludns\n", t1-t0);
-	
-		bresenham(fb, Pt(40,40), Pt(300,300), red);
-		bresenham(fb, Pt(80,80), Pt(100,200), red);
-		bresenham(fb, Pt(80,80), Pt(200,100), red);
-	
-		filltriangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), blue);
-		triangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), red);
-		filltriangle(fb, Pt(300,120), Pt(200,350), Pt(50, 210), blue);
-		triangle(fb, Pt(300,120), Pt(200,350), Pt(50, 210), red);
-		filltriangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), blue);
-		triangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), red);
-	
-		t0 = nanosec();
-		shade(fb, triangleshader);
-		t1 = nanosec();
-		fprint(2, "shader took %lludns\n", t1-t0);
 	}
+
+	render();
 
 	drawc = chancreate(sizeof(void*), 1);
 	display->locking = 1;
