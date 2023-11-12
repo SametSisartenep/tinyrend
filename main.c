@@ -66,6 +66,23 @@ swap(int *a, int *b)
 	*b = t;
 }
 
+double
+step(double edge, double n)
+{
+	if(n < edge)
+		return 0;
+	return 1;
+}
+
+double
+smoothstep(double edge0, double edge1, double n)
+{
+	double t;
+
+	t = fclamp((n-edge0)/(edge1-edge0), 0, 1);
+	return t*t * (3 - 2*t);
+}
+
 void *
 emalloc(ulong n)
 {
@@ -377,6 +394,34 @@ circleshader(Sparams *sp)
 	return sp->frag;
 }
 
+/* some shaping functions from The Book of Shaders, Chapter 5 */
+Memimage *
+sfshader(Sparams *sp)
+{
+	Point2 uv;
+	double y, pct;
+	uchar cbuf[4];
+
+	uv = Pt2(sp->p.x,sp->p.y,1);
+	uv.x /= Dx(fb->r);
+	uv.y /= Dy(fb->r);
+	uv.y = 1 - uv.y;		/* make [0 0] the bottom-left corner */
+
+//	y = step(0.5, uv.x);
+	y = pow(uv.x, 5);
+//	y = sin(uv.x);
+//	y = smoothstep(0.1, 0.9, uv.x);
+	pct = smoothstep(y-0.02, y, uv.y) - smoothstep(y, y+0.02, uv.y);
+
+	cbuf[0] = 0xFF;
+	cbuf[1] = 0xFF*flerp(y, 0, pct);
+	cbuf[2] = 0xFF*flerp(y, 1, pct);
+	cbuf[3] = 0xFF*flerp(y, 0, pct);
+
+	memfillcolor(sp->frag, *(ulong*)cbuf);
+	return sp->frag;
+}
+
 Memimage *
 modelshader(Sparams *sp)
 {
@@ -491,24 +536,28 @@ render(void)
 		t1 = nanosec();
 		fprint(2, "shader took %lludns\n", t1-t0);
 	}else{
+//		t0 = nanosec();
+//		shade(fb, circleshader);
+//		t1 = nanosec();
+//		fprint(2, "shader took %lludns\n", t1-t0);
+//
+//		bresenham(fb, Pt(40,40), Pt(300,300), red);
+//		bresenham(fb, Pt(80,80), Pt(100,200), red);
+//		bresenham(fb, Pt(80,80), Pt(200,100), red);
+//
+//		filltriangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), blue);
+//		triangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), red);
+//		filltriangle(fb, Pt(300,120), Pt(200,350), Pt(50, 210), blue);
+//		triangle(fb, Pt(300,120), Pt(200,350), Pt(50, 210), red);
+//		filltriangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), blue);
+//		triangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), red);
+//
+//		t0 = nanosec();
+//		shade(fb, triangleshader);
+//		t1 = nanosec();
+
 		t0 = nanosec();
-		shade(fb, circleshader);
-		t1 = nanosec();
-		fprint(2, "shader took %lludns\n", t1-t0);
-
-		bresenham(fb, Pt(40,40), Pt(300,300), red);
-		bresenham(fb, Pt(80,80), Pt(100,200), red);
-		bresenham(fb, Pt(80,80), Pt(200,100), red);
-
-		filltriangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), blue);
-		triangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), red);
-		filltriangle(fb, Pt(300,120), Pt(200,350), Pt(50, 210), blue);
-		triangle(fb, Pt(300,120), Pt(200,350), Pt(50, 210), red);
-		filltriangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), blue);
-		triangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), red);
-
-		t0 = nanosec();
-		shade(fb, triangleshader);
+		shade(fb, sfshader);
 		t1 = nanosec();
 		fprint(2, "shader took %lludns\n", t1-t0);
 	}
