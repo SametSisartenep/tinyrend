@@ -391,7 +391,7 @@ modelshader(Sparams *sp)
 	static Point3 light = {0,0,-1,0};	/* global light field */
 	Point tp;				/* texture point */
 	int i;
-	uchar cbuf[4], cbuf2[4];
+	uchar cbuf[4];
 	double z, intensity;
 
 	verts = model->vertdata[OBJVGeometric].verts;
@@ -452,11 +452,8 @@ modelshader(Sparams *sp)
 					tp.x = (tt.p0.x + tt.p1.x + tt.p2.x)*Dx(modeltex->r);
 					tp.y = Dy(modeltex->r)-(tt.p0.y + tt.p1.y + tt.p2.y)*Dy(modeltex->r);
 
-					unloadmemimage(modeltex, rectaddpt(Rect(0,0,1,1), tp), cbuf2, sizeof cbuf2);
 					cbuf[0] = 0xFF;
-					cbuf[1] = cbuf2[0];
-					cbuf[2] = cbuf2[1];
-					cbuf[3] = cbuf2[2];
+					unloadmemimage(modeltex, rectaddpt(Rect(0,0,1,1), tp), cbuf+1, sizeof cbuf - 1);
 				}else{
 					cbuf[0] = 0xFF;
 					cbuf[1] = 0xFF;
