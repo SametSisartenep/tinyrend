@@ -35,6 +35,7 @@ Memimage *fb;
 double *zbuf;
 Memimage *red, *green, *blue;
 OBJ *model;
+Memimage *modeltex;
 Channel *drawc;
 int nprocs;
 
@@ -42,6 +43,28 @@ char winspec[32];
 
 void resized(void);
 uvlong nanosec(void);
+
+int
+min(int a, int b)
+{
+	return a < b? a: b;
+}
+
+int
+max(int a, int b)
+{
+	return a > b? a: b;
+}
+
+void
+swap(int *a, int *b)
+{
+	int t;
+
+	t = *a;
+	*a = *b;
+	*b = t;
+}
 
 void *
 emalloc(ulong n)
@@ -96,16 +119,43 @@ eallocmemimage(Rectangle r, ulong chan)
 	return i;
 }
 
-int
-min(int a, int b)
+static void
+decproc(void *arg)
 {
-	return a < b? a: b;
+	int fd, *pfd;
+
+	pfd = arg;
+	fd = pfd[2];
+
+	close(pfd[0]);
+	dup(fd, 0);
+	close(fd);
+	dup(pfd[1], 1);
+	close(pfd[1]);
+
+	execl("/bin/tga", "tga", "-9t", nil);
+	threadexitsall("execl: %r");
 }
 
-int
-max(int a, int b)
+Memimage *
+readtga(char *path)
 {
-	return a > b? a: b;
+	Memimage *i;
+	int fd, pfd[3];
+
+	if(pipe(pfd) < 0)
+		sysfatal("pipe: %r");
+	fd = open(path, OREAD);
+	if(fd < 0)
+		sysfatal("open: %r");
+	pfd[2] = fd;
+	procrfork(decproc, pfd, mainstacksize, RFFDG|RFNAMEG|RFNOTEG);
+	close(pfd[1]);
+	i = readmemimage(pfd[0]);
+	close(pfd[0]);
+	close(fd);
+
+	return i;
 }
 
 Memimage *
@@ -127,16 +177,6 @@ pixel(Memimage *dst, Point p, Memimage *src)
 		return;
 
 	memimagedraw(dst, rectaddpt(Rect(0,0,1,1), p), src, ZP, nil, ZP, SoverD);
-}
-
-void
-swap(int *a, int *b)
-{
-	int t;
-
-	t = *a;
-	*a = *b;
-	*b = t;
 }
 
 void
@@ -342,19 +382,20 @@ modelshader(Sparams *sp)
 {
 	OBJObject *o;
 	OBJElem *e;
-	OBJVertex *verts;
+	OBJVertex *verts, *tverts;		/* geometric and texture vertices */
 	OBJIndexArray *idxtab;
 	Triangle3 t;
-	Triangle2 st;
+	Triangle2 st, tt;			/* screen and texture triangles */
 	Rectangle bbox;
-	Point3 bc;
-	static Point3 light = {0,0,-1,0}; /* global light field */
-	Point3 n;
+	Point3 bc, n;				/* barycentric coords and surface normal */
+	static Point3 light = {0,0,-1,0};	/* global light field */
+	Point tp;				/* texture point */
 	int i;
-	uchar cbuf[4];
+	uchar cbuf[4], cbuf2[4];
 	double z, intensity;
 
 	verts = model->vertdata[OBJVGeometric].verts;
+	tverts = model->vertdata[OBJVTexture].verts;
 
 	for(i = 0; i < nelem(model->objtab); i++)
 		for(o = model->objtab[i]; o != nil; o = o->next)
@@ -398,10 +439,33 @@ modelshader(Sparams *sp)
 				if(intensity < 0)
 					continue;
 
-				cbuf[0] = 0xFF;
-				cbuf[1] = 0xFF*intensity;
-				cbuf[2] = 0xFF*intensity;
-				cbuf[3] = 0xFF*intensity;
+				idxtab = &e->indextab[OBJVTexture];
+				if(modeltex != nil && idxtab->nindex == 3){
+					tt.p0 = Pt2(tverts[idxtab->indices[0]].u, tverts[idxtab->indices[0]].v, 1);
+					tt.p1 = Pt2(tverts[idxtab->indices[1]].u, tverts[idxtab->indices[1]].v, 1);
+					tt.p2 = Pt2(tverts[idxtab->indices[2]].u, tverts[idxtab->indices[2]].v, 1);
+
+					tt.p0 = mulpt2(tt.p0, bc.x);
+					tt.p1 = mulpt2(tt.p1, bc.y);
+					tt.p2 = mulpt2(tt.p2, bc.z);
+
+					tp.x = (tt.p0.x + tt.p1.x + tt.p2.x)*Dx(modeltex->r);
+					tp.y = Dy(modeltex->r)-(tt.p0.y + tt.p1.y + tt.p2.y)*Dy(modeltex->r);
+
+					unloadmemimage(modeltex, rectaddpt(Rect(0,0,1,1), tp), cbuf2, sizeof cbuf2);
+					cbuf[0] = cbuf2[3];
+					cbuf[1] = cbuf2[0];
+					cbuf[2] = cbuf2[1];
+					cbuf[3] = cbuf2[2];
+				}else{
+					cbuf[0] = 0xFF;
+					cbuf[1] = 0xFF;
+					cbuf[2] = 0xFF;
+					cbuf[3] = 0xFF;
+				}
+				cbuf[1] *= intensity;
+				cbuf[2] *= intensity;
+				cbuf[3] *= intensity;
 
 				memfillcolor(sp->frag, *(ulong*)cbuf);
 				return sp->frag;
@@ -485,7 +549,7 @@ key(Rune r)
 void
 usage(void)
 {
-	fprint(2, "usage: %s [-n nprocs] [-m objfile]\n", argv0);
+	fprint(2, "usage: %s [-n nprocs] [-m objfile] [-t texfile]\n", argv0);
 	exits("usage");
 }
 
@@ -495,16 +559,20 @@ threadmain(int argc, char *argv[])
 	Mousectl *mc;
 	Keyboardctl *kc;
 	Rune r;
-	char *mdlpath;
+	char *mdlpath, *texpath;
 
 	GEOMfmtinstall();
 	mdlpath = nil;
+	texpath = nil;
 	ARGBEGIN{
 	case 'n':
 		nprocs = strtoul(EARGF(usage()), nil, 10);
 		break;
 	case 'm':
 		mdlpath = EARGF(usage());
+		break;
+	case 't':
+		texpath = EARGF(usage());
 		break;
 	default: usage();
 	}ARGEND;
@@ -535,6 +603,8 @@ threadmain(int argc, char *argv[])
 
 	if(mdlpath != nil && (model = objparse(mdlpath)) == nil)
 		sysfatal("objparse: %r");
+	if(texpath != nil && (modeltex = readtga(texpath)) == nil)
+		sysfatal("readtga: %r");
 
 	render();
 
