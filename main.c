@@ -453,7 +453,7 @@ modelshader(Sparams *sp)
 					tp.y = Dy(modeltex->r)-(tt.p0.y + tt.p1.y + tt.p2.y)*Dy(modeltex->r);
 
 					unloadmemimage(modeltex, rectaddpt(Rect(0,0,1,1), tp), cbuf2, sizeof cbuf2);
-					cbuf[0] = cbuf2[3];
+					cbuf[0] = 0xFF;
 					cbuf[1] = cbuf2[0];
 					cbuf[2] = cbuf2[1];
 					cbuf[3] = cbuf2[2];
