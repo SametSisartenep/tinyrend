@@ -32,10 +32,13 @@ struct SUparams
 
 
 Memimage *fb;
+double *zbuf;
 Memimage *red, *green, *blue;
 OBJ *model;
 Channel *drawc;
 int nprocs;
+
+char winspec[32];
 
 void resized(void);
 uvlong nanosec(void);
@@ -343,12 +346,13 @@ modelshader(Sparams *sp)
 	OBJIndexArray *idxtab;
 	Triangle3 t;
 	Triangle2 st;
+	Rectangle bbox;
 	Point3 bc;
+	static Point3 light = {0,0,-1,0}; /* global light field */
+	Point3 n;
 	int i;
 	uchar cbuf[4];
-	static Point3 light = {0,0,-1,1}; /* global point light */
-	Point3 n;
-	double intensity;
+	double z, intensity;
 
 	verts = model->vertdata[OBJVGeometric].verts;
 
@@ -365,13 +369,28 @@ modelshader(Sparams *sp)
 				t.p1 = Pt3(verts[idxtab->indices[1]].x,verts[idxtab->indices[1]].y,verts[idxtab->indices[1]].z,verts[idxtab->indices[1]].w);
 				t.p2 = Pt3(verts[idxtab->indices[2]].x,verts[idxtab->indices[2]].y,verts[idxtab->indices[2]].z,verts[idxtab->indices[2]].w);
 
-				st.p0 = Pt2((t.p0.x+1)*Dx(fb->r)/2, (t.p0.y+1)*Dy(fb->r)/2, 1);
-				st.p1 = Pt2((t.p1.x+1)*Dx(fb->r)/2, (t.p1.y+1)*Dy(fb->r)/2, 1);
-				st.p2 = Pt2((t.p2.x+1)*Dx(fb->r)/2, (t.p2.y+1)*Dy(fb->r)/2, 1);
+				st.p0 = Pt2((t.p0.x+1)*Dx(fb->r)/2, (-t.p0.y+1)*Dy(fb->r)/2, 1);
+				st.p1 = Pt2((t.p1.x+1)*Dx(fb->r)/2, (-t.p1.y+1)*Dy(fb->r)/2, 1);
+				st.p2 = Pt2((t.p2.x+1)*Dx(fb->r)/2, (-t.p2.y+1)*Dy(fb->r)/2, 1);
+
+				bbox = Rect(
+					min(min(st.p0.x, st.p1.x), st.p2.x), min(min(st.p0.y, st.p1.y), st.p2.y),
+					max(max(st.p0.x, st.p1.x), st.p2.x), max(max(st.p0.y, st.p1.y), st.p2.y)
+				);
+				bbox.max.x++;
+				bbox.max.y++;
+				if(!ptinrect(sp->p, bbox))
+					continue;
 
 				bc = barycoords(st, Pt2(sp->p.x,sp->p.y,1));
 				if(bc.x < 0 || bc.y < 0 || bc.z < 0)
 					continue;
+
+				z = t.p0.z*bc.x + t.p1.z*bc.y + t.p2.z*bc.z;
+
+				if(z <= zbuf[sp->p.x+sp->p.y*Dx(fb->r)])
+					continue;
+				zbuf[sp->p.x+sp->p.y*Dx(fb->r)] = z;
 
 				n = normvec3(crossvec3(subpt3(t.p2, t.p0), subpt3(t.p1, t.p0)));
 				intensity = dotvec3(n, light);
@@ -391,59 +410,6 @@ modelshader(Sparams *sp)
 }
 
 void
-drawmodel(Memimage *dst)
-{
-	OBJObject *o;
-	OBJElem *e;
-	OBJVertex *verts;
-	OBJIndexArray *idxtab;
-	Triangle3 t;
-	Triangle st;
-	int i;
-	uchar cbuf[4];
-	static Point3 light = {0,0,-1,1}; /* global point light */
-	Point3 n;
-	double intensity;
-
-	verts = model->vertdata[OBJVGeometric].verts;
-
-	for(i = 0; i < nelem(model->objtab); i++)
-		for(o = model->objtab[i]; o != nil; o = o->next)
-			for(e = o->child; e != nil; e = e->next){
-				idxtab = &e->indextab[OBJVGeometric];
-
-				/* discard non-triangles */
-				if(e->type != OBJEFace || idxtab->nindex != 3)
-					continue;
-
-				t.p0 = Pt3(verts[idxtab->indices[0]].x,verts[idxtab->indices[0]].y,verts[idxtab->indices[0]].z,verts[idxtab->indices[0]].w);
-				t.p1 = Pt3(verts[idxtab->indices[1]].x,verts[idxtab->indices[1]].y,verts[idxtab->indices[1]].z,verts[idxtab->indices[1]].w);
-				t.p2 = Pt3(verts[idxtab->indices[2]].x,verts[idxtab->indices[2]].y,verts[idxtab->indices[2]].z,verts[idxtab->indices[2]].w);
-
-				st[0] = Pt((t.p0.x+1)*Dx(fb->r)/2, (t.p0.y+1)*Dy(fb->r)/2);
-				st[1] = Pt((t.p1.x+1)*Dx(fb->r)/2, (t.p1.y+1)*Dy(fb->r)/2);
-				st[2] = Pt((t.p2.x+1)*Dx(fb->r)/2, (t.p2.y+1)*Dy(fb->r)/2);
-
-				/* discard degenerates */
-				if(eqpt(st[0], st[1]) || eqpt(st[1], st[2]) || eqpt(st[2], st[0]))
-					continue;
-
-				n = normvec3(crossvec3(subpt3(t.p2, t.p0), subpt3(t.p1, t.p0)));
-				intensity = dotvec3(n, light);
-				/* back-face culling */
-				if(intensity < 0)
-					continue;
-
-				cbuf[0] = 0xFF;
-				cbuf[1] = 0xFF*intensity;
-				cbuf[2] = 0xFF*intensity;
-				cbuf[3] = 0xFF*intensity;
-
-				filltriangle(dst, st[0], st[1], st[2], rgb(*(ulong*)cbuf));
-			}
-}
-
-void
 redraw(void)
 {
 	lockdisplay(display);
@@ -459,15 +425,10 @@ render(void)
 	uvlong t0, t1;
 
 	if(model != nil){
-//		t0 = nanosec();
-//		shade(fb, modelshader);
-//		t1 = nanosec();
-//		fprint(2, "shader took %lludns\n", t1-t0);
-
 		t0 = nanosec();
-		drawmodel(fb);
+		shade(fb, modelshader);
 		t1 = nanosec();
-		fprint(2, "drawmodel took %lludns\n", t1-t0);
+		fprint(2, "shader took %lludns\n", t1-t0);
 	}else{
 		t0 = nanosec();
 		shade(fb, circleshader);
@@ -553,7 +514,8 @@ threadmain(int argc, char *argv[])
 	if(nprocs < 1)
 		nprocs = strtoul(getenv("NPROC"), nil, 10);
 
-	if(newwindow(nil) < 0)
+	snprint(winspec, sizeof winspec, "-dx %d -dy %d", 800, 800);
+	if(newwindow(winspec) < 0)
 		sysfatal("newwindow: %r");
 	if(initdraw(nil, nil, "tinyrend") < 0)
 		sysfatal("initdraw: %r");
@@ -565,15 +527,14 @@ threadmain(int argc, char *argv[])
 		sysfatal("initkeyboard: %r");
 
 	fb = eallocmemimage(rectsubpt(screen->r, screen->r.min), screen->chan);
+	zbuf = emalloc(Dx(fb->r)*Dy(fb->r)*sizeof(double));
+	memset(zbuf, ~0, Dx(fb->r)*Dy(fb->r)*sizeof(double));
 	red = rgb(DRed);
 	green = rgb(DGreen);
 	blue = rgb(DBlue);
 
-	if(mdlpath != nil){
-		model = objparse(mdlpath);
-		if(model == nil)
-			sysfatal("objparse: %r");
-	}
+	if(mdlpath != nil && (model = objparse(mdlpath)) == nil)
+		sysfatal("objparse: %r");
 
 	render();
 
