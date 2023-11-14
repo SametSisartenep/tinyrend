@@ -9,6 +9,8 @@
 #include <geometry.h>
 #include "libobj/obj.h"
 
+#define HZ2MS(hz)	(1000/(hz))
+
 typedef Point Triangle[3];
 typedef struct Sparams Sparams;
 typedef struct SUparams SUparams;
@@ -31,13 +33,14 @@ struct SUparams
 };
 
 
-Memimage *fb;
+Memimage *fb, *zfb, *curfb;
 double *zbuf;
 Memimage *red, *green, *blue;
 OBJ *model;
 Memimage *modeltex;
 Channel *drawc;
 int nprocs;
+int rendering;
 
 char winspec[32];
 
@@ -461,10 +464,8 @@ modelshader(Sparams *sp)
 
 				bbox = Rect(
 					min(min(st.p0.x, st.p1.x), st.p2.x), min(min(st.p0.y, st.p1.y), st.p2.y),
-					max(max(st.p0.x, st.p1.x), st.p2.x), max(max(st.p0.y, st.p1.y), st.p2.y)
+					max(max(st.p0.x, st.p1.x), st.p2.x)+1, max(max(st.p0.y, st.p1.y), st.p2.y)+1
 				);
-				bbox.max.x++;
-				bbox.max.y++;
 				if(!ptinrect(sp->p, bbox))
 					continue;
 
@@ -473,10 +474,16 @@ modelshader(Sparams *sp)
 					continue;
 
 				z = t.p0.z*bc.x + t.p1.z*bc.y + t.p2.z*bc.z;
-
 				if(z <= zbuf[sp->p.x+sp->p.y*Dx(fb->r)])
 					continue;
 				zbuf[sp->p.x+sp->p.y*Dx(fb->r)] = z;
+
+				cbuf[0] = 0xFF;
+				cbuf[1] = 0xFF*z;
+				cbuf[2] = 0xFF*z;
+				cbuf[3] = 0xFF*z;
+				memfillcolor(sp->frag, *(ulong*)cbuf);
+				pixel(zfb, sp->p, sp->frag);
 
 				n = normvec3(crossvec3(subpt3(t.p2, t.p0), subpt3(t.p1, t.p0)));
 				intensity = dotvec3(n, light);
@@ -520,7 +527,7 @@ redraw(void)
 {
 	lockdisplay(display);
 	draw(screen, screen->r, display->black, nil, ZP);
-	loadimage(screen, rectaddpt(fb->r, screen->r.min), byteaddr(fb, fb->r.min), bytesperline(fb->r, fb->depth)*Dy(fb->r));
+	loadimage(screen, rectaddpt(curfb->r, screen->r.min), byteaddr(curfb, curfb->r.min), bytesperline(curfb->r, curfb->depth)*Dy(curfb->r));
 	flushimage(display, 1);
 	unlockdisplay(display);
 }
@@ -536,11 +543,6 @@ render(void)
 		t1 = nanosec();
 		fprint(2, "shader took %lludns\n", t1-t0);
 	}else{
-//		t0 = nanosec();
-//		shade(fb, circleshader);
-//		t1 = nanosec();
-//		fprint(2, "shader took %lludns\n", t1-t0);
-//
 //		bresenham(fb, Pt(40,40), Pt(300,300), red);
 //		bresenham(fb, Pt(80,80), Pt(100,200), red);
 //		bresenham(fb, Pt(80,80), Pt(200,100), red);
@@ -551,10 +553,6 @@ render(void)
 //		triangle(fb, Pt(300,120), Pt(200,350), Pt(50, 210), red);
 //		filltriangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), blue);
 //		triangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), red);
-//
-//		t0 = nanosec();
-//		shade(fb, triangleshader);
-//		t1 = nanosec();
 
 		t0 = nanosec();
 		shade(fb, sfshader);
@@ -564,8 +562,58 @@ render(void)
 }
 
 void
-rmb(Mousectl *, Keyboardctl *)
+renderer(void *)
 {
+	threadsetname("renderer");
+
+	render();
+	rendering = 0;
+	nbsendp(drawc, nil);
+	threadexits(nil);
+}
+
+void
+scrsync(void *)
+{
+	Ioproc *io;
+
+	threadsetname("scrsync");
+
+	io = ioproc();
+	while(rendering){
+		nbsendp(drawc, nil);
+		iosleep(io, 2000);
+	}
+	closeioproc(io);
+	threadexits(nil);
+}
+
+static char *
+genrmbmenuitem(int idx)
+{
+	enum {
+		TOGGLEZBUF,
+	};
+
+	if(idx == TOGGLEZBUF)
+		return curfb == zfb? "hide z-buffer": "show z-buffer";
+	return nil;
+}
+
+void
+rmb(Mousectl *mc, Keyboardctl *)
+{
+	enum {
+		TOGGLEZBUF,
+	};
+	static Menu menu = { .gen = genrmbmenuitem };
+
+	switch(menuhit(3, mc, &menu, _screen)){
+	case TOGGLEZBUF:
+		curfb = curfb == fb? zfb: fb;
+		break;
+	}
+	nbsendp(drawc, nil);
 }
 
 void
@@ -643,6 +691,8 @@ threadmain(int argc, char *argv[])
 	fb = eallocmemimage(rectsubpt(screen->r, screen->r.min), screen->chan);
 	zbuf = emalloc(Dx(fb->r)*Dy(fb->r)*sizeof(double));
 	memset(zbuf, ~0, Dx(fb->r)*Dy(fb->r)*sizeof(double));
+	zfb = eallocmemimage(fb->r, fb->chan);
+	curfb = fb;
 	red = rgb(DRed);
 	green = rgb(DGreen);
 	blue = rgb(DBlue);
@@ -652,12 +702,13 @@ threadmain(int argc, char *argv[])
 	if(texpath != nil && (modeltex = readtga(texpath)) == nil)
 		sysfatal("readtga: %r");
 
-	render();
-
 	drawc = chancreate(sizeof(void*), 1);
 	display->locking = 1;
 	unlockdisplay(display);
-	nbsend(drawc, nil);
+
+	rendering = 1;
+	proccreate(renderer, nil, mainstacksize);
+	threadcreate(scrsync, nil, mainstacksize);
 
 	for(;;){
 		enum { MOUSE, RESIZE, KEYBOARD, DRAW };
