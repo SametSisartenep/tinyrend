@@ -69,6 +69,15 @@ swap(int *a, int *b)
 	*b = t;
 }
 
+void
+memsetd(double *p, double v, usize len)
+{
+	double *dp;
+
+	for(dp = p; dp < p+len; dp++)
+		*dp = v;
+}
+
 double
 step(double edge, double n)
 {
@@ -537,28 +546,10 @@ render(void)
 {
 	uvlong t0, t1;
 
-	if(model != nil){
-		t0 = nanosec();
-		shade(fb, modelshader);
-		t1 = nanosec();
-		fprint(2, "shader took %lludns\n", t1-t0);
-	}else{
-//		bresenham(fb, Pt(40,40), Pt(300,300), red);
-//		bresenham(fb, Pt(80,80), Pt(100,200), red);
-//		bresenham(fb, Pt(80,80), Pt(200,100), red);
-//
-//		filltriangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), blue);
-//		triangle(fb, Pt(30,10), Pt(45, 45), Pt(5, 100), red);
-//		filltriangle(fb, Pt(300,120), Pt(200,350), Pt(50, 210), blue);
-//		triangle(fb, Pt(300,120), Pt(200,350), Pt(50, 210), red);
-//		filltriangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), blue);
-//		triangle(fb, Pt(400,230), Pt(450,180), Pt(150, 320), red);
-
-		t0 = nanosec();
-		shade(fb, sfshader);
-		t1 = nanosec();
-		fprint(2, "shader took %lludns\n", t1-t0);
-	}
+	t0 = nanosec();
+	shade(fb, model != nil? modelshader: sfshader);
+	t1 = nanosec();
+	fprint(2, "shader took %lludns\n", t1-t0);
 }
 
 void
@@ -690,7 +681,7 @@ threadmain(int argc, char *argv[])
 
 	fb = eallocmemimage(rectsubpt(screen->r, screen->r.min), screen->chan);
 	zbuf = emalloc(Dx(fb->r)*Dy(fb->r)*sizeof(double));
-	memset(zbuf, ~0, Dx(fb->r)*Dy(fb->r)*sizeof(double));
+	memsetd(zbuf, Inf(-1), Dx(fb->r)*Dy(fb->r));
 	zfb = eallocmemimage(fb->r, fb->chan);
 	curfb = fb;
 	red = rgb(DRed);
