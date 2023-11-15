@@ -488,9 +488,9 @@ modelshader(Sparams *sp)
 				zbuf[sp->p.x+sp->p.y*Dx(fb->r)] = z;
 
 				cbuf[0] = 0xFF;
-				cbuf[1] = 0xFF*z;
-				cbuf[2] = 0xFF*z;
-				cbuf[3] = 0xFF*z;
+				cbuf[1] = 0xFF*fabs(z);
+				cbuf[2] = 0xFF*fabs(z);
+				cbuf[3] = 0xFF*fabs(z);
 				memfillcolor(sp->frag, *(ulong*)cbuf);
 				pixel(zfb, sp->p, sp->frag);
 
