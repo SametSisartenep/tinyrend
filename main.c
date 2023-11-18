@@ -27,6 +27,7 @@ struct SUparams
 {
 	Memimage *dst;
 	Rectangle r;
+	OBJElem **b, **e;
 	int id;
 	Channel *donec;
 	Memimage *(*shader)(Sparams*);
@@ -35,14 +36,28 @@ struct SUparams
 
 Memimage *fb, *zfb, *curfb;
 double *zbuf;
+Lock zbuflk;
 Memimage *red, *green, *blue;
 OBJ *model;
 Memimage *modeltex;
 Channel *drawc;
 int nprocs;
 int rendering;
+int flag2;
 
 char winspec[32];
+Point3 camera = {0,0,3,1};
+Matrix3 proj = {
+	1,  0, 0, 0,
+	0, -1, 0, 0,
+	0,  0, 1, 0,
+	0,  0, 0, 1,
+}, view = {
+	800/2.0, 0, 0, 800/2.0,
+	0, 800/2.0, 0, 800/2.0,
+	0, 0, 1/2.0, 1/2.0,
+	0, 0, 0, 1,
+}, rota;
 
 void resized(void);
 uvlong nanosec(void);
@@ -63,6 +78,26 @@ void
 swap(int *a, int *b)
 {
 	int t;
+
+	t = *a;
+	*a = *b;
+	*b = t;
+}
+
+void
+swappt2(Point2 *a, Point2 *b)
+{
+	Point2 t;
+
+	t = *a;
+	*a = *b;
+	*b = t;
+}
+
+void
+swappt3(Point3 *a, Point3 *b)
+{
+	Point3 t;
 
 	t = *a;
 	*a = *b;
@@ -297,6 +332,68 @@ filltriangle(Memimage *dst, Point p0, Point p1, Point p2, Memimage *src)
 }
 
 void
+filltriangle2(Memimage *dst, Triangle3 st, Triangle2 tt, double intensity, Memimage *frag)
+{
+	Rectangle bbox;
+	Point p, tp;
+	Triangle2 st₂, tt₂;
+	Point3 bc;
+	double z;
+	uchar cbuf[4];
+
+	bbox = Rect(
+		min(min(st.p0.x, st.p1.x), st.p2.x), min(min(st.p0.y, st.p1.y), st.p2.y),
+		max(max(st.p0.x, st.p1.x), st.p2.x)+1, max(max(st.p0.y, st.p1.y), st.p2.y)+1
+	);
+	st₂.p0 = Pt2(st.p0.x, st.p0.y, 1);
+	st₂.p1 = Pt2(st.p1.x, st.p1.y, 1);
+	st₂.p2 = Pt2(st.p2.x, st.p2.y, 1);
+	cbuf[0] = 0xFF;
+
+	for(p.y = bbox.min.y; p.y < bbox.max.y; p.y++)
+		for(p.x = bbox.min.x; p.x < bbox.max.x; p.x++){
+			bc = barycoords(st₂, Pt2(p.x,p.y,1));
+			if(bc.x < 0 || bc.y < 0 || bc.z < 0)
+				continue;
+
+			z = st.p0.z*bc.x + st.p1.z*bc.y + st.p2.z*bc.z;
+			lock(&zbuflk);
+			if(z <= zbuf[p.x + p.y*Dx(dst->r)]){
+				unlock(&zbuflk);
+				continue;
+			}
+			zbuf[p.x + p.y*Dx(dst->r)] = z;
+
+			cbuf[1] = 0xFF*z;
+			cbuf[2] = 0xFF*z;
+			cbuf[3] = 0xFF*z;
+			memfillcolor(frag, *(ulong*)cbuf);
+			pixel(zfb, p, frag);
+			unlock(&zbuflk);
+
+			cbuf[0] = 0xFF;
+			if(tt.p0.w != 0 && tt.p1.w != 0 && tt.p2.w != 0){
+				tt₂.p0 = mulpt2(tt.p0, bc.x);
+				tt₂.p1 = mulpt2(tt.p1, bc.y);
+				tt₂.p2 = mulpt2(tt.p2, bc.z);
+
+				tp.x = (tt₂.p0.x + tt₂.p1.x + tt₂.p2.x)*Dx(modeltex->r);
+				tp.y = (1 - (tt₂.p0.y + tt₂.p1.y + tt₂.p2.y))*Dy(modeltex->r);
+
+				unloadmemimage(modeltex, rectaddpt(Rect(0,0,1,1), tp), cbuf+1, sizeof cbuf - 1);
+			}else
+				memset(cbuf+1, 0xFF, sizeof cbuf - 1);
+
+			cbuf[1] *= intensity;
+			cbuf[2] *= intensity;
+			cbuf[3] *= intensity;
+
+			memfillcolor(frag, *(ulong*)cbuf);
+			pixel(dst, p, frag);
+		}
+}
+
+void
 shaderunit(void *arg)
 {
 	SUparams *params;
@@ -344,6 +441,111 @@ shade(Memimage *dst, Memimage *(*shader)(Sparams*))
 		params->shader = shader;
 		proccreate(shaderunit, params, mainstacksize);
 		fprint(2, "spawned su %d for %R\n", params->id, params->r);
+	}
+
+	while(i--)
+		recvp(donec);
+	chanfree(donec);
+}
+
+void
+shaderunit2(void *arg)
+{
+	SUparams *params;
+	Sparams sp;
+	OBJVertex *verts, *tverts;		/* geometric and texture vertices */
+	OBJIndexArray *idxtab;
+	OBJElem **ep;
+	Triangle3 t, st;			/* world- and screen-space triangles */
+	Triangle2 tt;				/* texture triangle */
+	Point3 n;				/* surface normal */
+	static Point3 light = {0,0,-1,0};	/* global light field */
+	double intensity;
+
+	params = arg;
+	sp.frag = rgb(DBlack);
+
+	threadsetname("shader unit #%d", params->id);
+
+	verts = model->vertdata[OBJVGeometric].verts;
+	tverts = model->vertdata[OBJVTexture].verts;
+
+	for(ep = params->b; ep != params->e; ep++){
+		idxtab = &(*ep)->indextab[OBJVGeometric];
+
+		t.p0 = Pt3(verts[idxtab->indices[0]].x,verts[idxtab->indices[0]].y,verts[idxtab->indices[0]].z,verts[idxtab->indices[0]].w);
+		t.p1 = Pt3(verts[idxtab->indices[1]].x,verts[idxtab->indices[1]].y,verts[idxtab->indices[1]].z,verts[idxtab->indices[1]].w);
+		t.p2 = Pt3(verts[idxtab->indices[2]].x,verts[idxtab->indices[2]].y,verts[idxtab->indices[2]].z,verts[idxtab->indices[2]].w);
+
+		t.p0 = xform3(t.p0, rota);
+		t.p1 = xform3(t.p1, rota);
+		t.p2 = xform3(t.p2, rota);
+
+		st.p0 = xform3(t.p0, view);
+		st.p1 = xform3(t.p1, view);
+		st.p2 = xform3(t.p2, view);
+		st.p0 = divpt3(st.p0, st.p0.w);
+		st.p1 = divpt3(st.p1, st.p1.w);
+		st.p2 = divpt3(st.p2, st.p2.w);
+
+		n = normvec3(crossvec3(subpt3(t.p2, t.p0), subpt3(t.p1, t.p0)));
+		intensity = dotvec3(n, light);
+		/* back-face culling */
+		if(intensity <= 0)
+			continue;
+
+		idxtab = &(*ep)->indextab[OBJVTexture];
+		if(modeltex != nil && idxtab->nindex == 3){
+			tt.p0 = Pt2(tverts[idxtab->indices[0]].u, tverts[idxtab->indices[0]].v, 1);
+			tt.p1 = Pt2(tverts[idxtab->indices[1]].u, tverts[idxtab->indices[1]].v, 1);
+			tt.p2 = Pt2(tverts[idxtab->indices[2]].u, tverts[idxtab->indices[2]].v, 1);
+		}else
+			memset(&tt, 0, sizeof tt);
+
+		filltriangle2(params->dst, st, tt, intensity, sp.frag);
+	}
+
+	freememimage(sp.frag);
+	sendp(params->donec, nil);
+	free(params);
+	threadexits(nil);
+}
+
+void
+shade2(Memimage *dst)
+{
+	int i, nelems, nparts;
+	OBJObject *o;
+	OBJElem **elems, *e;
+	OBJIndexArray *idxtab;
+	SUparams *params;
+	Channel *donec;
+
+	elems = nil;
+	nelems = 0;
+	for(i = 0; i < nelem(model->objtab); i++)
+		for(o = model->objtab[i]; o != nil; o = o->next)
+			for(e = o->child; e != nil; e = e->next){
+				idxtab = &e->indextab[OBJVGeometric];
+				/* discard non-triangles */
+				if(e->type != OBJEFace || idxtab->nindex != 3)
+					continue;
+				elems = erealloc(elems, ++nelems*sizeof(*elems));
+				elems[nelems-1] = e;
+			}
+	nparts = nelems/nprocs;
+
+	donec = chancreate(sizeof(void*), 0);
+
+	for(i = 0; i < nprocs; i++){
+		params = emalloc(sizeof *params);
+		params->dst = dst;
+		params->b = &elems[i*nparts];
+		params->e = params->b + nparts;
+		params->id = i;
+		params->donec = donec;
+		proccreate(shaderunit2, params, mainstacksize);
+		fprint(2, "spawned su %d for elems %d to %d\n", params->id, i*nparts, i*nparts+nparts);
 	}
 
 	while(i--)
@@ -441,7 +643,7 @@ modelshader(Sparams *sp)
 	OBJElem *e;
 	OBJVertex *verts, *tverts;		/* geometric and texture vertices */
 	OBJIndexArray *idxtab;
-	Triangle3 t;
+	Triangle3 t, t₂;
 	Triangle2 st, tt;			/* screen and texture triangles */
 	Rectangle bbox;
 	Point3 bc, n;				/* barycentric coords and surface normal */
@@ -453,6 +655,7 @@ modelshader(Sparams *sp)
 
 	verts = model->vertdata[OBJVGeometric].verts;
 	tverts = model->vertdata[OBJVTexture].verts;
+	cbuf[0] = 0xFF;
 
 	for(i = 0; i < nelem(model->objtab); i++)
 		for(o = model->objtab[i]; o != nil; o = o->next)
@@ -467,9 +670,20 @@ modelshader(Sparams *sp)
 				t.p1 = Pt3(verts[idxtab->indices[1]].x,verts[idxtab->indices[1]].y,verts[idxtab->indices[1]].z,verts[idxtab->indices[1]].w);
 				t.p2 = Pt3(verts[idxtab->indices[2]].x,verts[idxtab->indices[2]].y,verts[idxtab->indices[2]].z,verts[idxtab->indices[2]].w);
 
-				st.p0 = Pt2((t.p0.x+1)*Dx(fb->r)/2, (-t.p0.y+1)*Dy(fb->r)/2, 1);
-				st.p1 = Pt2((t.p1.x+1)*Dx(fb->r)/2, (-t.p1.y+1)*Dy(fb->r)/2, 1);
-				st.p2 = Pt2((t.p2.x+1)*Dx(fb->r)/2, (-t.p2.y+1)*Dy(fb->r)/2, 1);
+				t.p0 = xform3(t.p0, rota);
+				t.p1 = xform3(t.p1, rota);
+				t.p2 = xform3(t.p2, rota);
+
+				t₂.p0 = xform3(t.p0, view);
+				t₂.p1 = xform3(t.p1, view);
+				t₂.p2 = xform3(t.p2, view);
+				t₂.p0 = divpt3(t₂.p0, t₂.p0.w);
+				t₂.p1 = divpt3(t₂.p1, t₂.p1.w);
+				t₂.p2 = divpt3(t₂.p2, t₂.p2.w);
+
+				st.p0 = Pt2(t₂.p0.x, t₂.p0.y, 1);
+				st.p1 = Pt2(t₂.p1.x, t₂.p1.y, 1);
+				st.p2 = Pt2(t₂.p2.x, t₂.p2.y, 1);
 
 				bbox = Rect(
 					min(min(st.p0.x, st.p1.x), st.p2.x), min(min(st.p0.y, st.p1.y), st.p2.y),
@@ -482,22 +696,21 @@ modelshader(Sparams *sp)
 				if(bc.x < 0 || bc.y < 0 || bc.z < 0)
 					continue;
 
-				z = t.p0.z*bc.x + t.p1.z*bc.y + t.p2.z*bc.z;
+				z = t₂.p0.z*bc.x + t₂.p1.z*bc.y + t₂.p2.z*bc.z;
 				if(z <= zbuf[sp->p.x+sp->p.y*Dx(fb->r)])
 					continue;
 				zbuf[sp->p.x+sp->p.y*Dx(fb->r)] = z;
 
-				cbuf[0] = 0xFF;
-				cbuf[1] = 0xFF*fabs(z);
-				cbuf[2] = 0xFF*fabs(z);
-				cbuf[3] = 0xFF*fabs(z);
+				cbuf[1] = 0xFF*z;
+				cbuf[2] = 0xFF*z;
+				cbuf[3] = 0xFF*z;
 				memfillcolor(sp->frag, *(ulong*)cbuf);
 				pixel(zfb, sp->p, sp->frag);
 
 				n = normvec3(crossvec3(subpt3(t.p2, t.p0), subpt3(t.p1, t.p0)));
 				intensity = dotvec3(n, light);
 				/* back-face culling */
-				if(intensity < 0)
+				if(intensity <= 0)
 					continue;
 
 				idxtab = &e->indextab[OBJVTexture];
@@ -511,12 +724,10 @@ modelshader(Sparams *sp)
 					tt.p2 = mulpt2(tt.p2, bc.z);
 
 					tp.x = (tt.p0.x + tt.p1.x + tt.p2.x)*Dx(modeltex->r);
-					tp.y = Dy(modeltex->r)-(tt.p0.y + tt.p1.y + tt.p2.y)*Dy(modeltex->r);
+					tp.y = (1 - (tt.p0.y + tt.p1.y + tt.p2.y))*Dy(modeltex->r);
 
-					cbuf[0] = 0xFF;
 					unloadmemimage(modeltex, rectaddpt(Rect(0,0,1,1), tp), cbuf+1, sizeof cbuf - 1);
 				}else{
-					cbuf[0] = 0xFF;
 					cbuf[1] = 0xFF;
 					cbuf[2] = 0xFF;
 					cbuf[3] = 0xFF;
@@ -547,7 +758,10 @@ render(void)
 	uvlong t0, t1;
 
 	t0 = nanosec();
-	shade(fb, model != nil? modelshader: sfshader);
+	if(flag2)
+		shade2(fb);
+	else
+		shade(fb, model != nil? modelshader: sfshader);
 	t1 = nanosec();
 	fprint(2, "shader took %lludns\n", t1-t0);
 }
@@ -608,8 +822,12 @@ rmb(Mousectl *mc, Keyboardctl *)
 }
 
 void
-lmb(Mousectl *, Keyboardctl *)
+lmb(Mousectl *mc, Keyboardctl *)
 {
+	Point p;
+
+	p = subpt(mc->xy, screen->r.min);
+	fprint(2, "p %P z %g\n", p, zbuf[p.x + p.y*Dx(fb->r)]);
 }
 
 void
@@ -634,7 +852,7 @@ key(Rune r)
 void
 usage(void)
 {
-	fprint(2, "usage: %s [-n nprocs] [-m objfile] [-t texfile]\n", argv0);
+	fprint(2, "usage: %s [-2] [-n nprocs] [-m objfile] [-t texfile] [-a yrotangle] [-z camzpos]\n", argv0);
 	exits("usage");
 }
 
@@ -645,11 +863,16 @@ threadmain(int argc, char *argv[])
 	Keyboardctl *kc;
 	Rune r;
 	char *mdlpath, *texpath;
+	double θ;
 
 	GEOMfmtinstall();
 	mdlpath = nil;
 	texpath = nil;
+	θ = 0;
 	ARGBEGIN{
+	case '2':
+		flag2++;
+		break;
 	case 'n':
 		nprocs = strtoul(EARGF(usage()), nil, 10);
 		break;
@@ -658,6 +881,12 @@ threadmain(int argc, char *argv[])
 		break;
 	case 't':
 		texpath = EARGF(usage());
+		break;
+	case 'a':
+		θ = strtoul(EARGF(usage()), nil, 10)*DEG;
+		break;
+	case 'z':
+		camera.z = strtod(EARGF(usage()), nil);
 		break;
 	default: usage();
 	}ARGEND;
@@ -697,6 +926,16 @@ threadmain(int argc, char *argv[])
 	display->locking = 1;
 	unlockdisplay(display);
 
+	proj[3][2] = -1.0/camera.z;
+	Matrix3 yrot = {
+		cos(θ), 0, -sin(θ), 0,
+		0, 1, 0, 0,
+		sin(θ), 0, cos(θ), 0,
+		0, 0, 0, 1,
+	};
+	identity3(rota);
+	mulm3(rota, yrot);
+	mulm3(view, proj);
 	rendering = 1;
 	proccreate(renderer, nil, mainstacksize);
 	threadcreate(scrsync, nil, mainstacksize);
