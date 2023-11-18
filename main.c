@@ -477,10 +477,6 @@ shaderunit2(void *arg)
 		t.p1 = Pt3(verts[idxtab->indices[1]].x,verts[idxtab->indices[1]].y,verts[idxtab->indices[1]].z,verts[idxtab->indices[1]].w);
 		t.p2 = Pt3(verts[idxtab->indices[2]].x,verts[idxtab->indices[2]].y,verts[idxtab->indices[2]].z,verts[idxtab->indices[2]].w);
 
-		t.p0 = xform3(t.p0, rota);
-		t.p1 = xform3(t.p1, rota);
-		t.p2 = xform3(t.p2, rota);
-
 		st.p0 = xform3(t.p0, view);
 		st.p1 = xform3(t.p1, view);
 		st.p2 = xform3(t.p2, view);
@@ -935,6 +931,7 @@ threadmain(int argc, char *argv[])
 	};
 	identity3(rota);
 	mulm3(rota, yrot);
+	mulm3(proj, rota);
 	mulm3(view, proj);
 	rendering = 1;
 	proccreate(renderer, nil, mainstacksize);
