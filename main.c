@@ -34,7 +34,7 @@ struct SUparams
 };
 
 
-Memimage *fb, *zfb, *curfb;
+Memimage *screenfb, *fb, *zfb, *nfb, *curfb;
 double *zbuf;
 Lock zbuflk;
 Memimage *red, *green, *blue;
@@ -44,6 +44,7 @@ Channel *drawc;
 int nprocs;
 int rendering;
 int flag2;
+int shownormals;
 
 char winspec[32];
 Point3 camera = {0,0,3,1};
@@ -332,7 +333,7 @@ filltriangle(Memimage *dst, Point p0, Point p1, Point p2, Memimage *src)
 }
 
 void
-filltriangle2(Memimage *dst, Triangle3 st, Triangle2 tt, double intensity, Memimage *frag)
+filltriangle2(Memimage *dst, Triangle3 st, Triangle3 nt, Triangle2 tt, double intensity, Memimage *frag)
 {
 	Rectangle bbox;
 	Point p, tp;
@@ -453,14 +454,15 @@ shaderunit2(void *arg)
 {
 	SUparams *params;
 	Sparams sp;
-	OBJVertex *verts, *tverts;		/* geometric and texture vertices */
+	OBJVertex *verts, *tverts, *nverts;	/* geometric, texture and normals vertices */
 	OBJIndexArray *idxtab;
 	OBJElem **ep;
-	Triangle3 t, st;			/* world- and screen-space triangles */
+	Triangle3 t, st, nt;			/* world-, screen-space and normals triangles */
 	Triangle2 tt;				/* texture triangle */
 	Point3 n;				/* surface normal */
 	static Point3 light = {0,0,-1,0};	/* global light field */
 	double intensity;
+	Point3 np0, np1;
 
 	params = arg;
 	sp.frag = rgb(DBlack);
@@ -469,6 +471,7 @@ shaderunit2(void *arg)
 
 	verts = model->vertdata[OBJVGeometric].verts;
 	tverts = model->vertdata[OBJVTexture].verts;
+	nverts = model->vertdata[OBJVNormal].verts;
 
 	for(ep = params->b; ep != params->e; ep++){
 		idxtab = &(*ep)->indextab[OBJVGeometric];
@@ -490,6 +493,18 @@ shaderunit2(void *arg)
 		if(intensity <= 0)
 			continue;
 
+		np0 = centroid3(st);
+		np1 = addpt3(np0, mulpt3(n, 10));
+		bresenham(nfb, Pt(np0.x,np0.y), Pt(np1.x,np1.y), green);
+
+		idxtab = &(*ep)->indextab[OBJVNormal];
+		if(modeltex != nil && idxtab->nindex == 3){
+			nt.p0 = Vec3(nverts[idxtab->indices[0]].i, nverts[idxtab->indices[0]].j, nverts[idxtab->indices[0]].k);
+			nt.p1 = Vec3(nverts[idxtab->indices[1]].i, nverts[idxtab->indices[1]].j, nverts[idxtab->indices[1]].k);
+			nt.p2 = Vec3(nverts[idxtab->indices[2]].i, nverts[idxtab->indices[2]].j, nverts[idxtab->indices[2]].k);
+		}else
+			memset(&nt, 0, sizeof nt);
+
 		idxtab = &(*ep)->indextab[OBJVTexture];
 		if(modeltex != nil && idxtab->nindex == 3){
 			tt.p0 = Pt2(tverts[idxtab->indices[0]].u, tverts[idxtab->indices[0]].v, 1);
@@ -498,7 +513,7 @@ shaderunit2(void *arg)
 		}else
 			memset(&tt, 0, sizeof tt);
 
-		filltriangle2(params->dst, st, tt, intensity, sp.frag);
+		filltriangle2(params->dst, st, nt, tt, intensity, sp.frag);
 	}
 
 	freememimage(sp.frag);
@@ -742,8 +757,11 @@ void
 redraw(void)
 {
 	lockdisplay(display);
-	draw(screen, screen->r, display->black, nil, ZP);
-	loadimage(screen, rectaddpt(curfb->r, screen->r.min), byteaddr(curfb, curfb->r.min), bytesperline(curfb->r, curfb->depth)*Dy(curfb->r));
+	memfillcolor(screenfb, DBlack);
+	memimagedraw(screenfb, screenfb->r, curfb, ZP, nil, ZP, SoverD);
+	if(shownormals)
+		memimagedraw(screenfb, screenfb->r, nfb, ZP, nil, ZP, SoverD);
+	loadimage(screen, rectaddpt(screenfb->r, screen->r.min), byteaddr(screenfb, screenfb->r.min), bytesperline(screenfb->r, screenfb->depth)*Dy(screenfb->r));
 	flushimage(display, 1);
 	unlockdisplay(display);
 }
@@ -794,10 +812,15 @@ genrmbmenuitem(int idx)
 {
 	enum {
 		TOGGLEZBUF,
+		TOGGLENORM,
 	};
 
-	if(idx == TOGGLEZBUF)
+	switch(idx){
+	case TOGGLEZBUF:
 		return curfb == zfb? "hide z-buffer": "show z-buffer";
+	case TOGGLENORM:
+		return shownormals? "hide normals": "show normals";
+	}
 	return nil;
 }
 
@@ -806,12 +829,16 @@ rmb(Mousectl *mc, Keyboardctl *)
 {
 	enum {
 		TOGGLEZBUF,
+		TOGGLENORM,
 	};
 	static Menu menu = { .gen = genrmbmenuitem };
 
 	switch(menuhit(3, mc, &menu, _screen)){
 	case TOGGLEZBUF:
 		curfb = curfb == fb? zfb: fb;
+		break;
+	case TOGGLENORM:
+		shownormals ^= 1;
 		break;
 	}
 	nbsendp(drawc, nil);
@@ -904,11 +931,13 @@ threadmain(int argc, char *argv[])
 	if((kc = initkeyboard(nil)) == nil)
 		sysfatal("initkeyboard: %r");
 
-	fb = eallocmemimage(rectsubpt(screen->r, screen->r.min), screen->chan);
+	screenfb = eallocmemimage(rectsubpt(screen->r, screen->r.min), screen->chan);
+	fb = eallocmemimage(screenfb->r, RGBA32);
 	zbuf = emalloc(Dx(fb->r)*Dy(fb->r)*sizeof(double));
 	memsetd(zbuf, Inf(-1), Dx(fb->r)*Dy(fb->r));
 	zfb = eallocmemimage(fb->r, fb->chan);
 	curfb = fb;
+	nfb = eallocmemimage(fb->r, fb->chan);
 	red = rgb(DRed);
 	green = rgb(DGreen);
 	blue = rgb(DBlue);
