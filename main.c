@@ -300,7 +300,7 @@ triangle(Memimage *dst, Point p0, Point p1, Point p2, Memimage *src)
 
 	bresenham(dst, t[0], t[1], src);
 	bresenham(dst, t[1], t[2], src);
-	bresenham(dst, t[2], t[0], green);
+	bresenham(dst, t[2], t[0], src);
 }
 
 void
@@ -339,7 +339,8 @@ filltriangle2(Memimage *dst, Triangle3 st, Triangle3 nt, Triangle2 tt, double in
 	Point p, tp;
 	Triangle2 st₂, tt₂;
 	Point3 bc;
-	double z;
+	static Point3 light = {0,0,-1,0};	/* global light field */
+	double z, intens[3];
 	uchar cbuf[4];
 
 	bbox = Rect(
@@ -355,6 +356,14 @@ filltriangle2(Memimage *dst, Triangle3 st, Triangle3 nt, Triangle2 tt, double in
 		for(p.x = bbox.min.x; p.x < bbox.max.x; p.x++){
 			bc = barycoords(st₂, Pt2(p.x,p.y,1));
 			if(bc.x < 0 || bc.y < 0 || bc.z < 0)
+				continue;
+
+			intens[0] = dotvec3(nt.p0, light);
+			intens[1] = dotvec3(nt.p1, light);
+			intens[2] = dotvec3(nt.p2, light);
+			intensity = intens[0]*bc.x + intens[1]*bc.y + intens[2]*bc.z;
+			/* back-face culling */
+			if(intensity <= 0)
 				continue;
 
 			z = st.p0.z*bc.x + st.p1.z*bc.y + st.p2.z*bc.z;
@@ -460,9 +469,10 @@ shaderunit2(void *arg)
 	Triangle3 t, st, nt;			/* world-, screen-space and normals triangles */
 	Triangle2 tt;				/* texture triangle */
 	Point3 n;				/* surface normal */
-	static Point3 light = {0,0,-1,0};	/* global light field */
-	double intensity;
-	Point3 np0, np1;
+//	static Point3 light = {0,0,-1,0};	/* global light field */
+//	double intensity, intens[3];
+	Point3 np0, np1, bc;
+	Triangle2 st₂;
 
 	params = arg;
 	sp.frag = rgb(DBlack);
@@ -480,6 +490,10 @@ shaderunit2(void *arg)
 		t.p1 = Pt3(verts[idxtab->indices[1]].x,verts[idxtab->indices[1]].y,verts[idxtab->indices[1]].z,verts[idxtab->indices[1]].w);
 		t.p2 = Pt3(verts[idxtab->indices[2]].x,verts[idxtab->indices[2]].y,verts[idxtab->indices[2]].z,verts[idxtab->indices[2]].w);
 
+		t.p0 = xform3(t.p0, rota);
+		t.p1 = xform3(t.p1, rota);
+		t.p2 = xform3(t.p2, rota);
+
 		st.p0 = xform3(t.p0, view);
 		st.p1 = xform3(t.p1, view);
 		st.p2 = xform3(t.p2, view);
@@ -487,21 +501,47 @@ shaderunit2(void *arg)
 		st.p1 = divpt3(st.p1, st.p1.w);
 		st.p2 = divpt3(st.p2, st.p2.w);
 
-		n = normvec3(crossvec3(subpt3(t.p2, t.p0), subpt3(t.p1, t.p0)));
-		intensity = dotvec3(n, light);
-		/* back-face culling */
-		if(intensity <= 0)
-			continue;
+//		n = normvec3(crossvec3(subpt3(t.p2, t.p0), subpt3(t.p1, t.p0)));
+//		intensity = dotvec3(n, light);
+//		/* back-face culling */
+//		if(intensity <= 0)
+//			continue;
 
-		np0 = centroid3(st);
-		np1 = addpt3(np0, mulpt3(n, 10));
-		bresenham(nfb, Pt(np0.x,np0.y), Pt(np1.x,np1.y), green);
+//		np0 = centroid3(st);
+//		np1 = addpt3(np0, mulpt3(n, 50));
+//		bresenham(nfb, Pt(np0.x,np0.y), Pt(np1.x,np1.y), memwhite);
 
 		idxtab = &(*ep)->indextab[OBJVNormal];
 		if(modeltex != nil && idxtab->nindex == 3){
 			nt.p0 = Vec3(nverts[idxtab->indices[0]].i, nverts[idxtab->indices[0]].j, nverts[idxtab->indices[0]].k);
 			nt.p1 = Vec3(nverts[idxtab->indices[1]].i, nverts[idxtab->indices[1]].j, nverts[idxtab->indices[1]].k);
 			nt.p2 = Vec3(nverts[idxtab->indices[2]].i, nverts[idxtab->indices[2]].j, nverts[idxtab->indices[2]].k);
+			nt.p0 = normvec3(nt.p0); nt.p0.z *= -1;
+			nt.p1 = normvec3(nt.p1); nt.p1.z *= -1;
+			nt.p2 = normvec3(nt.p2); nt.p2.z *= -1;
+//			nt.p0 = mulpt3(normvec3(nt.p0), -1);
+//			nt.p1 = mulpt3(normvec3(nt.p1), -1);
+//			nt.p2 = mulpt3(normvec3(nt.p2), -1);
+//			intens[0] = dotvec3(nt.p0, light);
+//			intens[1] = dotvec3(nt.p1, light);
+//			intens[2] = dotvec3(nt.p2, light);
+
+			st₂.p0 = Pt2(st.p0.x, st.p0.y, 1);
+			st₂.p1 = Pt2(st.p1.x, st.p1.y, 1);
+			st₂.p2 = Pt2(st.p2.x, st.p2.y, 1);
+			bc = barycoords(st₂, centroid(st₂));
+			np0 = centroid3(st);
+			np1 = Vec3(
+				nt.p0.x*bc.x + nt.p1.x*bc.y + nt.p2.x*bc.z,
+				nt.p0.y*bc.x + nt.p1.y*bc.y + nt.p2.y*bc.z,
+				nt.p0.z*bc.x + nt.p1.z*bc.y + nt.p2.z*bc.z);
+//			intensity = intens[0]*bc.x + intens[1]*bc.y + intens[2]*bc.z;
+//			/* back-face culling */
+//			if(intensity <= 0)
+//				continue;
+			np1 = addpt3(np0, mulpt3(np1, 50));
+			triangle(nfb, Pt(st.p0.x,st.p0.y), Pt(st.p1.x,st.p1.y), Pt(st.p2.x,st.p2.y), red);
+			bresenham(nfb, Pt(np0.x,np0.y), Pt(np1.x,np1.y), green);
 		}else
 			memset(&nt, 0, sizeof nt);
 
@@ -513,7 +553,7 @@ shaderunit2(void *arg)
 		}else
 			memset(&tt, 0, sizeof tt);
 
-		filltriangle2(params->dst, st, nt, tt, intensity, sp.frag);
+		filltriangle2(params->dst, st, nt, tt, 0, sp.frag);
 	}
 
 	freememimage(sp.frag);
@@ -960,7 +1000,6 @@ threadmain(int argc, char *argv[])
 	};
 	identity3(rota);
 	mulm3(rota, yrot);
-	mulm3(proj, rota);
 	mulm3(view, proj);
 	rendering = 1;
 	proccreate(renderer, nil, mainstacksize);
