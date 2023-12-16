@@ -763,7 +763,7 @@ render(void)
 	uvlong t0, t1;
 
 	t0 = nanosec();
-	shade(fb, vertshader, toonshader);
+	shade(fb, vertshader, gouraudshader);
 	t1 = nanosec();
 	fprint(2, "shader took %lludns\n", t1-t0);
 }
