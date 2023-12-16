@@ -394,7 +394,7 @@ vertshader(VSparams *sp)
 }
 
 Memimage *
-fragshader(FSparams *sp)
+gouraudshader(FSparams *sp)
 {
 	double intens;
 
@@ -404,6 +404,23 @@ fragshader(FSparams *sp)
 	sp->cbuf[1] *= intens;
 	sp->cbuf[2] *= intens;
 	sp->cbuf[3] *= intens;
+	memfillcolor(sp->frag, *(ulong*)sp->cbuf);
+
+	return sp->frag;
+}
+
+Memimage *
+toonshader(FSparams *sp)
+{
+	double intens;
+
+	intens = sp->su->var_intensity[0]*sp->bc.x;
+	intens += sp->su->var_intensity[1]*sp->bc.y;
+	intens += sp->su->var_intensity[2]*sp->bc.z;
+	intens = intens > 0.85? 1: intens > 0.60? 0.80: intens > 0.45? 0.60: intens > 0.30? 0.45: intens > 0.15? 0.30: 0;
+	sp->cbuf[1] = 0;
+	sp->cbuf[2] = 155*intens;
+	sp->cbuf[3] = 255*intens;
 	memfillcolor(sp->frag, *(ulong*)sp->cbuf);
 
 	return sp->frag;
@@ -746,7 +763,7 @@ render(void)
 	uvlong t0, t1;
 
 	t0 = nanosec();
-	shade(fb, vertshader, fragshader);
+	shade(fb, vertshader, toonshader);
 	t1 = nanosec();
 	fprint(2, "shader took %lludns\n", t1-t0);
 }
