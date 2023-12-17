@@ -78,6 +78,7 @@ int rendering;
 int shownormals;
 
 char winspec[32];
+Point3 light = {0,-1,1,1};	/* global directional light */
 Point3 camera = {0,0,3,1};
 Point3 center = {0,0,0,1};
 Point3 up = {0,1,0,0};
@@ -413,10 +414,7 @@ lookat(Point3 eye, Point3 o, Point3 up)
 Point3
 vertshader(VSparams *sp)
 {
-	static Point3 light = {1,1,1,0};	/* global light field */
-	light = subpt3(camera, center);
-
-	sp->su->var_intensity[sp->idx] = fmax(0, dotvec3(sp->n, normvec3(light)));
+	sp->su->var_intensity[sp->idx] = fmax(0, dotvec3(sp->n, light));
 	return xform3(sp->p, view);
 }
 
@@ -425,9 +423,7 @@ gouraudshader(FSparams *sp)
 {
 	double intens;
 
-	intens = sp->su->var_intensity[0]*sp->bc.x;
-	intens += sp->su->var_intensity[1]*sp->bc.y;
-	intens += sp->su->var_intensity[2]*sp->bc.z;
+	intens = dotvec3(Vec3(sp->su->var_intensity[0], sp->su->var_intensity[1], sp->su->var_intensity[2]), sp->bc);
 	sp->cbuf[1] *= intens;
 	sp->cbuf[2] *= intens;
 	sp->cbuf[3] *= intens;
@@ -441,9 +437,7 @@ toonshader(FSparams *sp)
 {
 	double intens;
 
-	intens = sp->su->var_intensity[0]*sp->bc.x;
-	intens += sp->su->var_intensity[1]*sp->bc.y;
-	intens += sp->su->var_intensity[2]*sp->bc.z;
+	intens = dotvec3(Vec3(sp->su->var_intensity[0], sp->su->var_intensity[1], sp->su->var_intensity[2]), sp->bc);
 	intens = intens > 0.85? 1: intens > 0.60? 0.80: intens > 0.45? 0.60: intens > 0.30? 0.45: intens > 0.15? 0.30: 0;
 	sp->cbuf[1] = 0;
 	sp->cbuf[2] = 155*intens;
@@ -588,7 +582,7 @@ shaderunit(void *arg)
 			nt.p0.x*bc.x + nt.p1.x*bc.y + nt.p2.x*bc.z,
 			nt.p0.y*bc.x + nt.p1.y*bc.y + nt.p2.y*bc.z,
 			nt.p0.z*bc.x + nt.p1.z*bc.y + nt.p2.z*bc.z);
-		np1 = addpt3(np0, mulpt3(np1, 50));
+		np1 = addpt3(np0, mulpt3(np1, Dx(fb->r)/32));
 		triangle(nfb, Pt(st₂.p0.x,st₂.p0.y), Pt(st₂.p1.x,st₂.p1.y), Pt(st₂.p2.x,st₂.p2.y), red);
 		bresenham(nfb, Pt(np0.x,np0.y), Pt(np1.x,np1.y), green);
 
@@ -934,12 +928,15 @@ threadmain(int argc, char *argv[])
 	char *mdlpath, *texpath;
 	char *sname;
 	double θ;
+	int fbw, fbh;
 
 	GEOMfmtinstall();
 	mdlpath = "mdl/def.obj";
 	texpath = nil;
 	sname = "gouraud";
 	θ = 0;
+	fbw = 200;
+	fbh = 200;
 	ARGBEGIN{
 	case 'n':
 		nprocs = strtoul(EARGF(usage()), nil, 10);
@@ -951,13 +948,19 @@ threadmain(int argc, char *argv[])
 		texpath = EARGF(usage());
 		break;
 	case 'a':
-		θ = strtoul(EARGF(usage()), nil, 10)*DEG;
+		θ = strtod(EARGF(usage()), nil)*DEG;
 		break;
 	case 'z':
 		camera.z = strtod(EARGF(usage()), nil);
 		break;
 	case 's':
 		sname = EARGF(usage());
+		break;
+	case 'W':
+		fbw = strtoul(EARGF(usage()), nil, 10);
+		break;
+	case 'H':
+		fbh = strtoul(EARGF(usage()), nil, 10);
 		break;
 	default: usage();
 	}ARGEND;
@@ -975,7 +978,20 @@ threadmain(int argc, char *argv[])
 	if(texpath != nil && (modeltex = readtga(texpath)) == nil)
 		sysfatal("readtga: %r");
 
-	snprint(winspec, sizeof winspec, "-dx %d -dy %d", 200, 200);
+	{
+		int i, nv[OBJNVERT], nf;
+		OBJObject *o;
+		OBJElem *e;
+
+		nf = 0;
+		memset(nv, 0, sizeof nv);
+		for(i = 0; i < OBJNVERT; i++) nv[i] += model->vertdata[i].nvert;
+		for(i = 0; i < OBJHTSIZE; i++) if((o = model->objtab[i]) != nil)
+		for(e = o->child; e != nil; e = e->next) if(e->type == OBJEFace) nf++;
+		fprint(2, "v %d vn %d vt %d f %d\n", nv[OBJVGeometric], nv[OBJVNormal], nv[OBJVTexture], nf);
+	}
+
+	snprint(winspec, sizeof winspec, "-dx %d -dy %d", fbw, fbh);
 	if(newwindow(winspec) < 0)
 		sysfatal("newwindow: %r");
 	if(initdraw(nil, nil, "tinyrend") < 0)
@@ -997,24 +1013,6 @@ threadmain(int argc, char *argv[])
 	green = rgb(DGreen);
 	blue = rgb(DBlue);
 
-	{
-		int i, nv[OBJNVERT], nf;
-		OBJObject *o;
-		OBJElem *e;
-
-		nf = 0;
-		memset(nv, 0, sizeof nv);
-		for(i = 0; i < OBJNVERT; i++) nv[i] += model->vertdata[i].nvert;
-		for(i = 0; i < OBJHTSIZE; i++) if((o = model->objtab[i]) != nil)
-		for(e = o->child; e != nil; e = e->next) if(e->type == OBJEFace) nf++;
-		fprint(2, "v %d vn %d vt %d f %d\n", nv[OBJVGeometric], nv[OBJVNormal], nv[OBJVTexture], nf);
-	}
-
-	drawc = chancreate(sizeof(void*), 1);
-	donedrawc = chancreate(sizeof(void*), 1);
-	display->locking = 1;
-	unlockdisplay(display);
-
 	Matrix3 yrot = {
 		cos(θ), 0, -sin(θ), 0,
 		0, 1, 0, 0,
@@ -1028,6 +1026,12 @@ threadmain(int argc, char *argv[])
 	mulm3(rota, yrot);
 	mulm3(proj, rota);
 	mulm3(view, proj);
+	light = normvec3(subpt3(light, center));
+
+	drawc = chancreate(sizeof(void*), 1);
+	donedrawc = chancreate(sizeof(void*), 1);
+	display->locking = 1;
+	unlockdisplay(display);
 
 	proccreate(renderer, s, mainstacksize);
 
