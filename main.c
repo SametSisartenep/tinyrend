@@ -57,7 +57,15 @@ struct Shader
 	Memimage *(*fshader)(FSparams*);
 };
 
+typedef struct Stats Stats;
 
+struct Stats
+{
+	uvlong min, avg, max, acc, n;
+};
+
+
+Stats fps;
 Memimage *screenfb, *fb, *zfb, *nfb, *curfb;
 double *zbuf;
 Lock zbuflk;
@@ -66,7 +74,6 @@ OBJ *model;
 Memimage *modeltex;
 Channel *drawc;
 int nprocs;
-int rendering;
 int shownormals;
 
 char winspec[32];
@@ -139,6 +146,16 @@ memsetd(double *p, double v, usize len)
 
 	for(dp = p; dp < p+len; dp++)
 		*dp = v;
+}
+
+void
+updatestats(Stats *s, uvlong v)
+{
+	s->n++;
+	s->acc += v;
+	s->avg = s->acc/s->n;
+	s->min = v < s->min || s->n == 1? v: s->min;
+	s->max = v > s->max || s->n == 1? v: s->max;
 }
 
 double
@@ -633,7 +650,7 @@ shade(Memimage *dst, Shader *s)
 		params->vshader = s->vshader;
 		params->fshader = s->fshader;
 		proccreate(shaderunit, params, mainstacksize);
-		fprint(2, "spawned su %d for elems [%d, %d)\n", params->id, i*nparts, i*nparts+nparts);
+//		fprint(2, "spawned su %d for elems [%d, %d)\n", params->id, i*nparts, i*nparts+nparts);
 	}
 
 	while(i--)
@@ -757,6 +774,7 @@ Shader shadertab[] = {
 	{ "triangle", vertshader, triangleshader },
 	{ "circle", vertshader, circleshader },
 	{ "box", vertshader, boxshader },
+	{ "sf", vertshader, sfshader },
 	{ "gouraud", vertshader, gouraudshader },
 	{ "toon", vertshader, toonshader },
 };
@@ -772,6 +790,16 @@ getshader(char *name)
 }
 
 void
+drawstats(void)
+{
+	char buf[128];
+
+	/* fps stats hold latency, so max period is min frequency */
+	snprint(buf, sizeof buf, "FPS %g/%g/%g", !fps.max? 0: 1e9/fps.max, !fps.avg? 0: 1e9/fps.avg, !fps.min? 0: 1e9/fps.min);
+	stringbg(screen, Pt(screen->r.min.x+10,screen->r.max.y-20), display->black, ZP, font, buf, display->white, ZP);
+}
+
+void
 redraw(void)
 {
 	lockdisplay(display);
@@ -780,6 +808,7 @@ redraw(void)
 	if(shownormals)
 		memimagedraw(screenfb, screenfb->r, nfb, ZP, nil, ZP, SoverD);
 	loadimage(screen, rectaddpt(screenfb->r, screen->r.min), byteaddr(screenfb, screenfb->r.min), bytesperline(screenfb->r, screenfb->depth)*Dy(screenfb->r));
+	drawstats();
 	flushimage(display, 1);
 	unlockdisplay(display);
 }
@@ -792,37 +821,18 @@ render(Shader *s)
 	t0 = nanosec();
 	shade(fb, s);
 	t1 = nanosec();
-	fprint(2, "shader took %lludns\n", t1-t0);
+	updatestats(&fps, t1-t0);
 }
 
 void
 renderer(void *arg)
 {
-	Shader *s;
-
 	threadsetname("renderer");
 
-	s = arg;
-
-	render(s);
-	rendering = 0;
-	nbsendp(drawc, nil);
-	threadexits(nil);
-}
-
-void
-scrsync(void *)
-{
-	Ioproc *io;
-
-	threadsetname("scrsync");
-
-	io = ioproc();
-	while(rendering){
+	for(;;){
+		render((Shader*)arg);
 		nbsendp(drawc, nil);
-		iosleep(io, 2000);
 	}
-	closeioproc(io);
 	threadexits(nil);
 }
 
@@ -1002,9 +1012,7 @@ threadmain(int argc, char *argv[])
 	mulm3(proj, rota);
 	mulm3(view, proj);
 
-	rendering = 1;
 	proccreate(renderer, s, mainstacksize);
-	threadcreate(scrsync, nil, mainstacksize);
 
 	for(;;){
 		enum { MOUSE, RESIZE, KEYBOARD, DRAW };
