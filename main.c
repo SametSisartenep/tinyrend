@@ -44,12 +44,13 @@ struct SUparams
 
 	double var_intensity[3];
 
+	uvlong uni_time;
+
 	Point3 (*vshader)(VSparams*);
 	Memimage *(*fshader)(FSparams*);
 };
 
 typedef struct Shader Shader;
-
 struct Shader
 {
 	char *name;
@@ -58,10 +59,9 @@ struct Shader
 };
 
 typedef struct Stats Stats;
-
 struct Stats
 {
-	uvlong min, avg, max, acc, n;
+	uvlong min, avg, max, acc, n, v;
 };
 
 
@@ -72,8 +72,9 @@ Lock zbuflk;
 Memimage *red, *green, *blue;
 OBJ *model;
 Memimage *modeltex;
-Channel *drawc;
+Channel *drawc, *donedrawc;
 int nprocs;
+int rendering;
 int shownormals;
 
 char winspec[32];
@@ -151,6 +152,7 @@ memsetd(double *p, double v, usize len)
 void
 updatestats(Stats *s, uvlong v)
 {
+	s->v = v;
 	s->n++;
 	s->acc += v;
 	s->avg = s->acc/s->n;
@@ -403,7 +405,6 @@ lookat(Point3 eye, Point3 o, Point3 up)
 	z = normvec3(subpt3(eye, o));
 	x = normvec3(crossvec3(up, z));
 	y = normvec3(crossvec3(z, x));
-	identity3(rota);
 	rota[0][0] = x.x; rota[0][1] = x.y; rota[0][2] = x.z; rota[0][3] = -o.x;
 	rota[1][0] = y.x; rota[1][1] = y.y; rota[1][2] = y.z; rota[1][3] = -o.y;
 	rota[2][0] = z.x; rota[2][1] = z.y; rota[2][2] = z.z; rota[2][3] = -o.z;
@@ -612,6 +613,7 @@ void
 shade(Memimage *dst, Shader *s)
 {
 	int i, nelems, nparts, nworkers;
+	uvlong time;
 	OBJObject *o;
 	OBJElem **elems, *e;
 	OBJIndexArray *idxtab;
@@ -637,6 +639,7 @@ shade(Memimage *dst, Shader *s)
 		nworkers = nprocs;
 		nparts = nelems/nprocs;
 	}
+	time = nanosec();
 
 	donec = chancreate(sizeof(void*), 0);
 
@@ -647,6 +650,7 @@ shade(Memimage *dst, Shader *s)
 		params->e = params->b + nparts;
 		params->id = i;
 		params->donec = donec;
+		params->uni_time = time;
 		params->vshader = s->vshader;
 		params->fshader = s->fshader;
 		proccreate(shaderunit, params, mainstacksize);
@@ -699,7 +703,8 @@ circleshader(FSparams *sp)
 	uv = Pt2(sp->p.x,sp->p.y,1);
 	uv.x /= Dx(fb->r);
 	uv.y /= Dy(fb->r);
-	r = 0.3;
+//	r = 0.3;
+	r = 0.3*sin(sp->su->uni_time/1e9);
 
 	if(vec2len(subpt2(uv, Vec2(0.5,0.5))) > r)
 		return nil;
@@ -727,8 +732,9 @@ sfshader(FSparams *sp)
 	uv.y = 1 - uv.y;		/* make [0 0] the bottom-left corner */
 
 //	y = step(0.5, uv.x);
-	y = pow(uv.x, 5);
+//	y = pow(uv.x, 5);
 //	y = sin(uv.x);
+	y = sin(uv.x*sp->su->uni_time/1e8)/2.0 + 0.5;
 //	y = smoothstep(0.1, 0.9, uv.x);
 	pct = smoothstep(y-0.02, y, uv.y) - smoothstep(y, y+0.02, uv.y);
 
@@ -795,7 +801,7 @@ drawstats(void)
 	char buf[128];
 
 	/* fps stats hold latency, so max period is min frequency */
-	snprint(buf, sizeof buf, "FPS %g/%g/%g", !fps.max? 0: 1e9/fps.max, !fps.avg? 0: 1e9/fps.avg, !fps.min? 0: 1e9/fps.min);
+	snprint(buf, sizeof buf, "FPS %.0f/%.0f/%.0f/%.0f", !fps.max? 0: 1e9/fps.max, !fps.avg? 0: 1e9/fps.avg, !fps.min? 0: 1e9/fps.min, !fps.v? 0: 1e9/fps.v);
 	stringbg(screen, Pt(screen->r.min.x+10,screen->r.max.y-20), display->black, ZP, font, buf, display->white, ZP);
 }
 
@@ -811,12 +817,19 @@ redraw(void)
 	drawstats();
 	flushimage(display, 1);
 	unlockdisplay(display);
+
+	sendp(donedrawc, nil);
 }
 
 void
 render(Shader *s)
 {
 	uvlong t0, t1;
+
+	memsetd(zbuf, Inf(-1), Dx(fb->r)*Dy(fb->r));
+	memfillcolor(fb, DTransparent);
+	memfillcolor(zfb, DTransparent);
+	memfillcolor(nfb, DTransparent);
 
 	t0 = nanosec();
 	shade(fb, s);
@@ -830,8 +843,11 @@ renderer(void *arg)
 	threadsetname("renderer");
 
 	for(;;){
+		rendering = 1;
 		render((Shader*)arg);
+		rendering = 0;
 		nbsendp(drawc, nil);
+		recvp(donedrawc);
 	}
 	threadexits(nil);
 }
@@ -959,7 +975,7 @@ threadmain(int argc, char *argv[])
 	if(texpath != nil && (modeltex = readtga(texpath)) == nil)
 		sysfatal("readtga: %r");
 
-	snprint(winspec, sizeof winspec, "-dx %d -dy %d", 800, 800);
+	snprint(winspec, sizeof winspec, "-dx %d -dy %d", 200, 200);
 	if(newwindow(winspec) < 0)
 		sysfatal("newwindow: %r");
 	if(initdraw(nil, nil, "tinyrend") < 0)
@@ -974,7 +990,6 @@ threadmain(int argc, char *argv[])
 	screenfb = eallocmemimage(rectsubpt(screen->r, screen->r.min), screen->chan);
 	fb = eallocmemimage(screenfb->r, RGBA32);
 	zbuf = emalloc(Dx(fb->r)*Dy(fb->r)*sizeof(double));
-	memsetd(zbuf, Inf(-1), Dx(fb->r)*Dy(fb->r));
 	zfb = eallocmemimage(fb->r, fb->chan);
 	curfb = fb;
 	nfb = eallocmemimage(fb->r, fb->chan);
@@ -996,6 +1011,7 @@ threadmain(int argc, char *argv[])
 	}
 
 	drawc = chancreate(sizeof(void*), 1);
+	donedrawc = chancreate(sizeof(void*), 1);
 	display->locking = 1;
 	unlockdisplay(display);
 
@@ -1005,6 +1021,7 @@ threadmain(int argc, char *argv[])
 		sin(θ), 0, cos(θ), 0,
 		0, 0, 0, 1,
 	};
+	identity3(rota);
 	viewport(fb->r);
 	projection(-1.0/vec3len(subpt3(camera, center)));
 	lookat(camera, center, up);
@@ -1035,7 +1052,8 @@ threadmain(int argc, char *argv[])
 			key(r);
 			break;
 		case DRAW:
-			redraw();
+			if(!rendering)
+				redraw();
 			break;
 		}
 	}
