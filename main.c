@@ -48,6 +48,15 @@ struct SUparams
 	Memimage *(*fshader)(FSparams*);
 };
 
+typedef struct Shader Shader;
+
+struct Shader
+{
+	char *name;
+	Point3 (*vshader)(VSparams*);
+	Memimage *(*fshader)(FSparams*);
+};
+
 
 Memimage *screenfb, *fb, *zfb, *nfb, *curfb;
 double *zbuf;
@@ -583,7 +592,7 @@ shaderunit(void *arg)
 }
 
 void
-shade(Memimage *dst, Point3 (*vs)(VSparams*), Memimage *(*fs)(FSparams*))
+shade(Memimage *dst, Shader *s)
 {
 	int i, nelems, nparts, nworkers;
 	OBJObject *o;
@@ -621,8 +630,8 @@ shade(Memimage *dst, Point3 (*vs)(VSparams*), Memimage *(*fs)(FSparams*))
 		params->e = params->b + nparts;
 		params->id = i;
 		params->donec = donec;
-		params->vshader = vs;
-		params->fshader = fs;
+		params->vshader = s->vshader;
+		params->fshader = s->fshader;
 		proccreate(shaderunit, params, mainstacksize);
 		fprint(2, "spawned su %d for elems [%d, %d)\n", params->id, i*nparts, i*nparts+nparts);
 	}
@@ -744,6 +753,24 @@ boxshader(FSparams *sp)
 	return sp->frag;
 }
 
+Shader shadertab[] = {
+	{ "triangle", vertshader, triangleshader },
+	{ "circle", vertshader, circleshader },
+	{ "box", vertshader, boxshader },
+	{ "gouraud", vertshader, gouraudshader },
+	{ "toon", vertshader, toonshader },
+};
+Shader *
+getshader(char *name)
+{
+	int i;
+
+	for(i = 0; i < nelem(shadertab); i++)
+		if(strcmp(shadertab[i].name, name) == 0)
+			return &shadertab[i];
+	return nil;
+}
+
 void
 redraw(void)
 {
@@ -758,22 +785,26 @@ redraw(void)
 }
 
 void
-render(void)
+render(Shader *s)
 {
 	uvlong t0, t1;
 
 	t0 = nanosec();
-	shade(fb, vertshader, gouraudshader);
+	shade(fb, s);
 	t1 = nanosec();
 	fprint(2, "shader took %lludns\n", t1-t0);
 }
 
 void
-renderer(void *)
+renderer(void *arg)
 {
+	Shader *s;
+
 	threadsetname("renderer");
 
-	render();
+	s = arg;
+
+	render(s);
 	rendering = 0;
 	nbsendp(drawc, nil);
 	threadexits(nil);
@@ -863,7 +894,7 @@ key(Rune r)
 void
 usage(void)
 {
-	fprint(2, "usage: %s [-n nprocs] [-m objfile] [-t texfile] [-a yrotangle] [-z camzpos]\n", argv0);
+	fprint(2, "usage: %s [-n nprocs] [-m objfile] [-t texfile] [-a yrotangle] [-z camzpos] [-s shader]\n", argv0);
 	exits("usage");
 }
 
@@ -873,12 +904,15 @@ threadmain(int argc, char *argv[])
 	Mousectl *mc;
 	Keyboardctl *kc;
 	Rune r;
+	Shader *s;
 	char *mdlpath, *texpath;
+	char *sname;
 	double θ;
 
 	GEOMfmtinstall();
-	mdlpath = nil;
+	mdlpath = "mdl/def.obj";
 	texpath = nil;
+	sname = "gouraud";
 	θ = 0;
 	ARGBEGIN{
 	case 'n':
@@ -896,6 +930,9 @@ threadmain(int argc, char *argv[])
 	case 'z':
 		camera.z = strtod(EARGF(usage()), nil);
 		break;
+	case 's':
+		sname = EARGF(usage());
+		break;
 	default: usage();
 	}ARGEND;
 	if(argc != 0)
@@ -903,6 +940,14 @@ threadmain(int argc, char *argv[])
 
 	if(nprocs < 1)
 		nprocs = strtoul(getenv("NPROC"), nil, 10);
+
+	if((s = getshader(sname)) == nil)
+		sysfatal("couldn't find %s shader", sname);
+
+	if((model = objparse(mdlpath)) == nil)
+		sysfatal("objparse: %r");
+	if(texpath != nil && (modeltex = readtga(texpath)) == nil)
+		sysfatal("readtga: %r");
 
 	snprint(winspec, sizeof winspec, "-dx %d -dy %d", 800, 800);
 	if(newwindow(winspec) < 0)
@@ -926,13 +971,6 @@ threadmain(int argc, char *argv[])
 	red = rgb(DRed);
 	green = rgb(DGreen);
 	blue = rgb(DBlue);
-
-	if(mdlpath == nil)
-		mdlpath = "mdl/def.obj";
-	if((model = objparse(mdlpath)) == nil)
-		sysfatal("objparse: %r");
-	if(texpath != nil && (modeltex = readtga(texpath)) == nil)
-		sysfatal("readtga: %r");
 
 	{
 		int i, nv[OBJNVERT], nf;
@@ -965,7 +1003,7 @@ threadmain(int argc, char *argv[])
 	mulm3(view, proj);
 
 	rendering = 1;
-	proccreate(renderer, nil, mainstacksize);
+	proccreate(renderer, s, mainstacksize);
 	threadcreate(scrsync, nil, mainstacksize);
 
 	for(;;){
