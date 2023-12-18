@@ -678,6 +678,23 @@ shade(Memimage *dst, Shader *s)
 	chanfree(donec);
 }
 
+Point3
+ivshader(VSparams *sp)
+{
+	Matrix3 M, D, V;
+
+	identity3(M);
+	identity3(D);
+	identity3(V);
+	mulm3(M, rota);
+	mulm3(D, proj);
+	mulm3(V, view);
+	mulm3(D, M);
+	mulm3(V, D);
+
+	return xform3(*sp->p, V);
+}
+
 Memimage *
 triangleshader(FSparams *sp)
 {
@@ -793,10 +810,10 @@ boxshader(FSparams *sp)
 }
 
 Shader shadertab[] = {
-	{ "triangle", vertshader, triangleshader },
-	{ "circle", vertshader, circleshader },
-	{ "box", vertshader, boxshader },
-	{ "sf", vertshader, sfshader },
+	{ "triangle", ivshader, triangleshader },
+	{ "circle", ivshader, circleshader },
+	{ "box", ivshader, boxshader },
+	{ "sf", ivshader, sfshader },
 	{ "gouraud", vertshader, gouraudshader },
 	{ "toon", vertshader, toonshader },
 };
