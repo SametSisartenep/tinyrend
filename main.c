@@ -20,8 +20,8 @@ typedef struct SUparams SUparams;
 struct VSparams
 {
 	SUparams *su;
-	Point3 p;
-	Point3 n;
+	Point3 *p;
+	Point3 *n;
 	uint idx;
 };
 
@@ -83,6 +83,7 @@ Point3 camera = {0,0,3,1};
 Point3 center = {0,0,0,1};
 Point3 up = {0,1,0,0};
 Matrix3 view, proj, rota;
+double θ, ω;
 
 void resized(void);
 uvlong nanosec(void);
@@ -414,8 +415,29 @@ lookat(Point3 eye, Point3 o, Point3 up)
 Point3
 vertshader(VSparams *sp)
 {
-	sp->su->var_intensity[sp->idx] = fmax(0, dotvec3(sp->n, light));
-	return xform3(sp->p, view);
+	Matrix3 yrot = {
+		cos(θ+fmod(ω*sp->su->uni_time/1e9, 2*PI)), 0, -sin(θ+fmod(ω*sp->su->uni_time/1e9, 2*PI)), 0,
+		0, 1, 0, 0,
+		sin(θ+fmod(ω*sp->su->uni_time/1e9, 2*PI)), 0, cos(θ+fmod(ω*sp->su->uni_time/1e9, 2*PI)), 0,
+		0, 0, 0, 1,
+	}, M, T, V;
+
+	identity3(M);
+	identity3(T);
+	identity3(V);
+	mulm3(M, rota);
+	mulm3(M, yrot);
+	mulm3(V, M);
+	mulm3(T, proj);
+	mulm3(T, V);
+	identity3(V);
+	mulm3(V, view);
+	mulm3(V, T);
+
+	*sp->n = xform3(*sp->n, M);
+	sp->su->var_intensity[sp->idx] = fmax(0, dotvec3(*sp->n, light));
+	*sp->p = xform3(*sp->p, V);
+	return *sp->p;
 }
 
 Memimage *
@@ -552,24 +574,24 @@ shaderunit(void *arg)
 			nt.p0 = Vec3(nverts[idxtab->indices[0]].i, nverts[idxtab->indices[0]].j, nverts[idxtab->indices[0]].k);
 			nt.p1 = Vec3(nverts[idxtab->indices[1]].i, nverts[idxtab->indices[1]].j, nverts[idxtab->indices[1]].k);
 			nt.p2 = Vec3(nverts[idxtab->indices[2]].i, nverts[idxtab->indices[2]].j, nverts[idxtab->indices[2]].k);
-			nt.p0 = xform3(normvec3(nt.p0), rota);
-			nt.p1 = xform3(normvec3(nt.p1), rota);
-			nt.p2 = xform3(normvec3(nt.p2), rota);
+			nt.p0 = normvec3(nt.p0);
+			nt.p1 = normvec3(nt.p1);
+			nt.p2 = normvec3(nt.p2);
 		}else{
 			n = normvec3(crossvec3(subpt3(t.p2, t.p0), subpt3(t.p1, t.p0)));
-			nt.p0 = nt.p1 = nt.p2 = xform3(mulpt3(n, -1), rota);
+			nt.p0 = nt.p1 = nt.p2 = mulpt3(n, -1);
 		}
 
-		vsp.p = t.p0;
-		vsp.n = nt.p0;
+		vsp.p = &t.p0;
+		vsp.n = &nt.p0;
 		vsp.idx = 0;
 		st.p0 = params->vshader(&vsp);
-		vsp.p = t.p1;
-		vsp.n = nt.p1;
+		vsp.p = &t.p1;
+		vsp.n = &nt.p1;
 		vsp.idx = 1;
 		st.p1 = params->vshader(&vsp);
-		vsp.p = t.p2;
-		vsp.n = nt.p2;
+		vsp.p = &t.p2;
+		vsp.n = &nt.p2;
 		vsp.idx = 2;
 		st.p2 = params->vshader(&vsp);
 
@@ -927,16 +949,15 @@ threadmain(int argc, char *argv[])
 	Shader *s;
 	char *mdlpath, *texpath;
 	char *sname;
-	double θ;
 	int fbw, fbh;
 
 	GEOMfmtinstall();
 	mdlpath = "mdl/def.obj";
 	texpath = nil;
 	sname = "gouraud";
-	θ = 0;
 	fbw = 200;
 	fbh = 200;
+	ω = 20*DEG;
 	ARGBEGIN{
 	case 'n':
 		nprocs = strtoul(EARGF(usage()), nil, 10);
@@ -949,6 +970,9 @@ threadmain(int argc, char *argv[])
 		break;
 	case 'a':
 		θ = strtod(EARGF(usage()), nil)*DEG;
+		break;
+	case 'v':
+		ω = strtod(EARGF(usage()), nil)*DEG;
 		break;
 	case 'z':
 		camera.z = strtod(EARGF(usage()), nil);
@@ -1013,19 +1037,10 @@ threadmain(int argc, char *argv[])
 	green = rgb(DGreen);
 	blue = rgb(DBlue);
 
-	Matrix3 yrot = {
-		cos(θ), 0, -sin(θ), 0,
-		0, 1, 0, 0,
-		sin(θ), 0, cos(θ), 0,
-		0, 0, 0, 1,
-	};
-	identity3(rota);
 	viewport(fb->r);
 	projection(-1.0/vec3len(subpt3(camera, center)));
+	identity3(rota);
 	lookat(camera, center, up);
-	mulm3(rota, yrot);
-	mulm3(proj, rota);
-	mulm3(view, proj);
 	light = normvec3(subpt3(light, center));
 
 	drawc = chancreate(sizeof(void*), 1);
