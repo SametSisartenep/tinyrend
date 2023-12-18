@@ -712,32 +712,35 @@ shaderunit(void *arg)
 void
 shade(Framebuf *fb, Shader *s)
 {
-	int i, nelems, nparts, nworkers;
+	static int nparts, nworkers;
+	static OBJElem **elems = nil;
+	int i, nelems;
 	uvlong time;
 	OBJObject *o;
-	OBJElem **elems, *e;
+	OBJElem *e;
 	OBJIndexArray *idxtab;
 	SUparams *params;
 	Channel *donec;
 
-	elems = nil;
-	nelems = 0;
-	for(i = 0; i < nelem(model->objtab); i++)
-		for(o = model->objtab[i]; o != nil; o = o->next)
-			for(e = o->child; e != nil; e = e->next){
-				idxtab = &e->indextab[OBJVGeometric];
-				/* discard non-triangles */
-				if(e->type != OBJEFace || idxtab->nindex != 3)
-					continue;
-				elems = erealloc(elems, ++nelems*sizeof(*elems));
-				elems[nelems-1] = e;
-			}
-	if(nelems < nprocs){
-		nworkers = nelems;
-		nparts = 1;
-	}else{
-		nworkers = nprocs;
-		nparts = nelems/nprocs;
+	if(elems == nil){
+		nelems = 0;
+		for(i = 0; i < nelem(model->objtab); i++)
+			for(o = model->objtab[i]; o != nil; o = o->next)
+				for(e = o->child; e != nil; e = e->next){
+					idxtab = &e->indextab[OBJVGeometric];
+					/* discard non-triangles */
+					if(e->type != OBJEFace || idxtab->nindex != 3)
+						continue;
+					elems = erealloc(elems, ++nelems*sizeof(*elems));
+					elems[nelems-1] = e;
+				}
+		if(nelems < nprocs){
+			nworkers = nelems;
+			nparts = 1;
+		}else{
+			nworkers = nprocs;
+			nparts = nelems/nprocs;
+		}
 	}
 	time = nanosec();
 
