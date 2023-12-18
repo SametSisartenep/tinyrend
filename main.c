@@ -420,19 +420,14 @@ vertshader(VSparams *sp)
 		0, 1, 0, 0,
 		sin(θ+fmod(ω*sp->su->uni_time/1e9, 2*PI)), 0, cos(θ+fmod(ω*sp->su->uni_time/1e9, 2*PI)), 0,
 		0, 0, 0, 1,
-	}, M, T, V;
+	}, M, V;
 
 	identity3(M);
-	identity3(T);
 	identity3(V);
 	mulm3(M, rota);
 	mulm3(M, yrot);
-	mulm3(V, M);
-	mulm3(T, proj);
-	mulm3(T, V);
-	identity3(V);
 	mulm3(V, view);
-	mulm3(V, T);
+	mulm3(V, M);
 
 	*sp->n = xform3(*sp->n, M);
 	sp->su->var_intensity[sp->idx] = fmax(0, dotvec3(*sp->n, light));
@@ -681,16 +676,13 @@ shade(Memimage *dst, Shader *s)
 Point3
 ivshader(VSparams *sp)
 {
-	Matrix3 M, D, V;
+	Matrix3 M, V;
 
 	identity3(M);
-	identity3(D);
 	identity3(V);
 	mulm3(M, rota);
-	mulm3(D, proj);
 	mulm3(V, view);
-	mulm3(D, M);
-	mulm3(V, D);
+	mulm3(V, M);
 
 	return xform3(*sp->p, V);
 }
@@ -1058,6 +1050,7 @@ threadmain(int argc, char *argv[])
 	projection(-1.0/vec3len(subpt3(camera, center)));
 	identity3(rota);
 	lookat(camera, center, up);
+	mulm3(view, proj);
 	light = normvec3(subpt3(light, center));
 
 	drawc = chancreate(sizeof(void*), 1);
