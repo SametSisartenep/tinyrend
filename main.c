@@ -15,6 +15,9 @@ typedef Point Triangle[3];
 typedef struct VSparams VSparams;
 typedef struct FSparams FSparams;
 typedef struct SUparams SUparams;
+typedef struct Shader Shader;
+typedef struct Framebuf Framebuf;
+typedef struct Framebufctl Framebufctl;
 
 /* shader params */
 struct VSparams
@@ -37,7 +40,7 @@ struct FSparams
 /* shader unit params */
 struct SUparams
 {
-	Memimage *dst;
+	Framebuf *fb;
 	OBJElem **b, **e;
 	int id;
 	Channel *donec;
@@ -50,12 +53,31 @@ struct SUparams
 	Memimage *(*fshader)(FSparams*);
 };
 
-typedef struct Shader Shader;
 struct Shader
 {
 	char *name;
 	Point3 (*vshader)(VSparams*);
 	Memimage *(*fshader)(FSparams*);
+};
+
+struct Framebuf
+{
+	Memimage *cb;
+	Memimage *zb;
+	double *zbuf;
+	Memimage *nb;	/* XXX DBG */
+	Rectangle r;
+};
+
+struct Framebufctl
+{
+	Framebuf *fb[2];
+	uint idx;
+	Lock swplk;
+
+	int (*draw)(Framebufctl*, Memimage*, int);
+	void (*swap)(Framebufctl*);
+	void (*reset)(Framebufctl*);
 };
 
 typedef struct Stats Stats;
@@ -66,15 +88,15 @@ struct Stats
 
 
 Stats fps;
-Memimage *screenfb, *fb, *zfb, *nfb, *curfb;
-double *zbuf;
+Framebufctl *fbctl;
+Memimage *screenfb;
 Lock zbuflk;
 Memimage *red, *green, *blue;
 OBJ *model;
 Memimage *modeltex;
-Channel *drawc, *donedrawc;
+Channel *drawc;
 int nprocs;
-int rendering;
+int showzbuffer;
 int shownormals;
 
 char winspec[32];
@@ -230,6 +252,71 @@ eallocmemimage(Rectangle r, ulong chan)
 		sysfatal("allocmemimage: %r");
 	memfillcolor(i, DTransparent);
 	return i;
+}
+
+static int
+framebufctl_draw(Framebufctl *ctl, Memimage *dst, int showz)
+{
+	if(canlock(&ctl->swplk)){
+		memimagedraw(dst, dst->r, showz? ctl->fb[ctl->idx]->zb: ctl->fb[ctl->idx]->cb, ZP, nil, ZP, SoverD);
+		/* XXX DBG */
+		if(shownormals)
+			memimagedraw(dst, dst->r, ctl->fb[ctl->idx]->nb, ZP, nil, ZP, SoverD);
+		unlock(&ctl->swplk);
+		return 0;
+	}
+	return -1;
+}
+
+static void
+framebufctl_swap(Framebufctl *ctl)
+{
+	lock(&ctl->swplk);
+	ctl->idx ^= 1;
+	unlock(&ctl->swplk);
+}
+
+static void
+framebufctl_reset(Framebufctl *ctl)
+{
+	Framebuf *fb;
+
+	/* address the back buffer—resetting the front buffer is VERBOTEN */
+	fb = ctl->fb[ctl->idx^1];
+	memsetd(fb->zbuf, Inf(-1), Dx(fb->r)*Dy(fb->r));
+	memfillcolor(fb->cb, DTransparent);
+	memfillcolor(fb->zb, DTransparent);
+	memfillcolor(fb->nb, DTransparent);	/* XXX DBG */
+}
+
+Framebuf *
+mkfb(Rectangle r)
+{
+	Framebuf *fb;
+
+	fb = emalloc(sizeof *fb);
+	fb->cb = eallocmemimage(r, RGBA32);
+	fb->zb = eallocmemimage(r, RGBA32);
+	fb->zbuf = emalloc(Dx(r)*Dy(r)*sizeof(*fb->zbuf));
+	memsetd(fb->zbuf, Inf(-1), Dx(r)*Dy(r));
+	fb->nb = eallocmemimage(r, RGBA32);	/* XXX DBG */
+	fb->r = r;
+	return fb;
+}
+
+Framebufctl *
+newfbctl(Rectangle r)
+{
+	Framebufctl *fc;
+
+	fc = emalloc(sizeof *fc);
+	memset(fc, 0, sizeof *fc);
+	fc->fb[0] = mkfb(r);
+	fc->fb[1] = mkfb(r);
+	fc->draw = framebufctl_draw;
+	fc->swap = framebufctl_swap;
+	fc->reset = framebufctl_reset;
+	return fc;
 }
 
 static void
@@ -483,8 +570,10 @@ rasterize(SUparams *params, Triangle3 st, Triangle2 tt, Memimage *frag)
 		min(min(st₂.p0.x, st₂.p1.x), st₂.p2.x), min(min(st₂.p0.y, st₂.p1.y), st₂.p2.y),
 		max(max(st₂.p0.x, st₂.p1.x), st₂.p2.x)+1, max(max(st₂.p0.y, st₂.p1.y), st₂.p2.y)+1
 	);
-	bbox.min.x = max(bbox.min.x, fb->r.min.x); bbox.min.y = max(bbox.min.y, fb->r.min.y);
-	bbox.max.x = min(bbox.max.x, fb->r.max.x); bbox.max.y = min(bbox.max.y, fb->r.max.y);
+	bbox.min.x = max(bbox.min.x, params->fb->r.min.x);
+	bbox.min.y = max(bbox.min.y, params->fb->r.min.y);
+	bbox.max.x = min(bbox.max.x, params->fb->r.max.x);
+	bbox.max.y = min(bbox.max.y, params->fb->r.max.y);
 	cbuf[0] = 0xFF;
 	fsp.su = params;
 	fsp.frag = frag;
@@ -500,17 +589,17 @@ rasterize(SUparams *params, Triangle3 st, Triangle2 tt, Memimage *frag)
 			w = st.p0.w*bc.x + st.p1.w*bc.y + st.p2.w*bc.z;
 			depth = fclamp(z/w, 0, 1);
 			lock(&zbuflk);
-			if(depth <= zbuf[p.x + p.y*Dx(params->dst->r)]){
+			if(depth <= params->fb->zbuf[p.x + p.y*Dx(params->fb->r)]){
 				unlock(&zbuflk);
 				continue;
 			}
-			zbuf[p.x + p.y*Dx(params->dst->r)] = depth;
+			params->fb->zbuf[p.x + p.y*Dx(params->fb->r)] = depth;
 
 			cbuf[1] = 0xFF*depth;
 			cbuf[2] = 0xFF*depth;
 			cbuf[3] = 0xFF*depth;
 			memfillcolor(frag, *(ulong*)cbuf);
-			pixel(zfb, p, frag);
+			pixel(params->fb->zb, p, frag);
 			unlock(&zbuflk);
 
 			cbuf[0] = 0xFF;
@@ -528,7 +617,7 @@ rasterize(SUparams *params, Triangle3 st, Triangle2 tt, Memimage *frag)
 
 			fsp.p = p;
 			fsp.bc = bc;
-			pixel(params->dst, p, params->fshader(&fsp));
+			pixel(params->fb->cb, p, params->fshader(&fsp));
 		}
 }
 
@@ -599,9 +688,9 @@ shaderunit(void *arg)
 			nt.p0.x*bc.x + nt.p1.x*bc.y + nt.p2.x*bc.z,
 			nt.p0.y*bc.x + nt.p1.y*bc.y + nt.p2.y*bc.z,
 			nt.p0.z*bc.x + nt.p1.z*bc.y + nt.p2.z*bc.z);
-		np1 = addpt3(np0, mulpt3(np1, Dx(fb->r)/32));
-		triangle(nfb, Pt(st₂.p0.x,st₂.p0.y), Pt(st₂.p1.x,st₂.p1.y), Pt(st₂.p2.x,st₂.p2.y), red);
-		bresenham(nfb, Pt(np0.x,np0.y), Pt(np1.x,np1.y), green);
+		np1 = addpt3(np0, mulpt3(np1, Dx(params->fb->r)/32));
+		triangle(params->fb->nb, Pt(st₂.p0.x,st₂.p0.y), Pt(st₂.p1.x,st₂.p1.y), Pt(st₂.p2.x,st₂.p2.y), red);
+		bresenham(params->fb->nb, Pt(np0.x,np0.y), Pt(np1.x,np1.y), green);
 
 		idxtab = &(*ep)->indextab[OBJVTexture];
 		if(modeltex != nil && idxtab->nindex == 3){
@@ -621,7 +710,7 @@ shaderunit(void *arg)
 }
 
 void
-shade(Memimage *dst, Shader *s)
+shade(Framebuf *fb, Shader *s)
 {
 	int i, nelems, nparts, nworkers;
 	uvlong time;
@@ -656,7 +745,7 @@ shade(Memimage *dst, Shader *s)
 
 	for(i = 0; i < nworkers; i++){
 		params = emalloc(sizeof *params);
-		params->dst = dst;
+		params->fb = fb;
 		params->b = &elems[i*nparts];
 		params->e = params->b + nparts;
 		params->id = i;
@@ -726,8 +815,8 @@ circleshader(FSparams *sp)
 	uchar cbuf[4];
 
 	uv = Pt2(sp->p.x,sp->p.y,1);
-	uv.x /= Dx(fb->r);
-	uv.y /= Dy(fb->r);
+	uv.x /= Dx(sp->su->fb->r);
+	uv.y /= Dy(sp->su->fb->r);
 //	r = 0.3;
 	r = 0.3*sin(sp->su->uni_time/1e9);
 
@@ -752,8 +841,8 @@ sfshader(FSparams *sp)
 	uchar cbuf[4];
 
 	uv = Pt2(sp->p.x,sp->p.y,1);
-	uv.x /= Dx(fb->r);
-	uv.y /= Dy(fb->r);
+	uv.x /= Dx(sp->su->fb->r);
+	uv.y /= Dy(sp->su->fb->r);
 	uv.y = 1 - uv.y;		/* make [0 0] the bottom-left corner */
 
 //	y = step(0.5, uv.x);
@@ -780,8 +869,8 @@ boxshader(FSparams *sp)
 	uchar cbuf[4];
 
 	uv = Pt2(sp->p.x,sp->p.y,1);
-	uv.x /= Dx(fb->r);
-	uv.y /= Dy(fb->r);
+	uv.x /= Dx(sp->su->fb->r);
+	uv.y /= Dy(sp->su->fb->r);
 	r = Vec2(0.2,0.4);
 
 	p = Pt2(fabs(uv.x - 0.5), fabs(uv.y - 0.5), 1);
@@ -833,17 +922,14 @@ drawstats(void)
 void
 redraw(void)
 {
-	lockdisplay(display);
 	memfillcolor(screenfb, 0x888888FF);
-	memimagedraw(screenfb, screenfb->r, curfb, ZP, nil, ZP, SoverD);
-	if(shownormals)
-		memimagedraw(screenfb, screenfb->r, nfb, ZP, nil, ZP, SoverD);
+	if(fbctl->draw(fbctl, screenfb, showzbuffer) < 0)
+		return;
+	lockdisplay(display);
 	loadimage(screen, rectaddpt(screenfb->r, screen->r.min), byteaddr(screenfb, screenfb->r.min), bytesperline(screenfb->r, screenfb->depth)*Dy(screenfb->r));
 	drawstats();
 	flushimage(display, 1);
 	unlockdisplay(display);
-
-	sendp(donedrawc, nil);
 }
 
 void
@@ -851,13 +937,10 @@ render(Shader *s)
 {
 	uvlong t0, t1;
 
-	memsetd(zbuf, Inf(-1), Dx(fb->r)*Dy(fb->r));
-	memfillcolor(fb, DTransparent);
-	memfillcolor(zfb, DTransparent);
-	memfillcolor(nfb, DTransparent);
+	fbctl->reset(fbctl);
 
 	t0 = nanosec();
-	shade(fb, s);
+	shade(fbctl->fb[fbctl->idx^1], s);	/* address the back buffer */
 	t1 = nanosec();
 	updatestats(&fps, t1-t0);
 }
@@ -868,11 +951,9 @@ renderer(void *arg)
 	threadsetname("renderer");
 
 	for(;;){
-		rendering = 1;
 		render((Shader*)arg);
-		rendering = 0;
+		fbctl->swap(fbctl);
 		nbsendp(drawc, nil);
-		recvp(donedrawc);
 	}
 	threadexits(nil);
 }
@@ -887,7 +968,7 @@ genrmbmenuitem(int idx)
 
 	switch(idx){
 	case TOGGLEZBUF:
-		return curfb == zfb? "hide z-buffer": "show z-buffer";
+		return showzbuffer? "hide z-buffer": "show z-buffer";
 	case TOGGLENORM:
 		return shownormals? "hide normals": "show normals";
 	}
@@ -905,7 +986,7 @@ rmb(Mousectl *mc, Keyboardctl *)
 
 	switch(menuhit(3, mc, &menu, _screen)){
 	case TOGGLEZBUF:
-		curfb = curfb == fb? zfb: fb;
+		showzbuffer ^= 1;
 		break;
 	case TOGGLENORM:
 		shownormals ^= 1;
@@ -920,7 +1001,7 @@ lmb(Mousectl *mc, Keyboardctl *)
 	Point p;
 
 	p = subpt(mc->xy, screen->r.min);
-	fprint(2, "p %P z %g\n", p, zbuf[p.x + p.y*Dx(fb->r)]);
+	fprint(2, "p %P z %g\n", p, fbctl->fb[fbctl->idx]->zbuf[p.x + p.y*Dx(fbctl->fb[fbctl->idx]->r)]);
 }
 
 void
@@ -1037,16 +1118,12 @@ threadmain(int argc, char *argv[])
 		sysfatal("initkeyboard: %r");
 
 	screenfb = eallocmemimage(rectsubpt(screen->r, screen->r.min), screen->chan);
-	fb = eallocmemimage(screenfb->r, RGBA32);
-	zbuf = emalloc(Dx(fb->r)*Dy(fb->r)*sizeof(double));
-	zfb = eallocmemimage(fb->r, fb->chan);
-	curfb = fb;
-	nfb = eallocmemimage(fb->r, fb->chan);
+	fbctl = newfbctl(screenfb->r);
 	red = rgb(DRed);
 	green = rgb(DGreen);
 	blue = rgb(DBlue);
 
-	viewport(fb->r);
+	viewport(screenfb->r);
 	projection(-1.0/vec3len(subpt3(camera, center)));
 	identity3(rota);
 	lookat(camera, center, up);
@@ -1054,7 +1131,6 @@ threadmain(int argc, char *argv[])
 	light = normvec3(subpt3(light, center));
 
 	drawc = chancreate(sizeof(void*), 1);
-	donedrawc = chancreate(sizeof(void*), 1);
 	display->locking = 1;
 	unlockdisplay(display);
 
@@ -1081,8 +1157,7 @@ threadmain(int argc, char *argv[])
 			key(r);
 			break;
 		case DRAW:
-			if(!rendering)
-				redraw();
+			redraw();
 			break;
 		}
 	}
