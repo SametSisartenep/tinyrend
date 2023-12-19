@@ -299,6 +299,7 @@ mkfb(Rectangle r)
 	fb->zb = eallocmemimage(r, RGBA32);
 	fb->zbuf = emalloc(Dx(r)*Dy(r)*sizeof(*fb->zbuf));
 	memsetd(fb->zbuf, Inf(-1), Dx(r)*Dy(r));
+	memset(&fb->zbuflk, 0, sizeof(fb->zbuflk));
 	fb->nb = eallocmemimage(r, RGBA32);	/* XXX DBG */
 	fb->r = r;
 	return fb;
