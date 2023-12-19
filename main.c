@@ -65,6 +65,7 @@ struct Framebuf
 	Memimage *cb;
 	Memimage *zb;
 	double *zbuf;
+	Lock zbuflk;
 	Memimage *nb;	/* XXX DBG */
 	Rectangle r;
 };
@@ -90,7 +91,6 @@ struct Stats
 Stats fps;
 Framebufctl *fbctl;
 Memimage *screenfb;
-Lock zbuflk;
 Memimage *red, *green, *blue;
 OBJ *model;
 Memimage *modeltex;
@@ -588,9 +588,9 @@ rasterize(SUparams *params, Triangle3 st, Triangle2 tt, Memimage *frag)
 			z = st.p0.z*bc.x + st.p1.z*bc.y + st.p2.z*bc.z;
 			w = st.p0.w*bc.x + st.p1.w*bc.y + st.p2.w*bc.z;
 			depth = fclamp(z/w, 0, 1);
-			lock(&zbuflk);
+			lock(&params->fb->zbuflk);
 			if(depth <= params->fb->zbuf[p.x + p.y*Dx(params->fb->r)]){
-				unlock(&zbuflk);
+				unlock(&params->fb->zbuflk);
 				continue;
 			}
 			params->fb->zbuf[p.x + p.y*Dx(params->fb->r)] = depth;
@@ -600,7 +600,7 @@ rasterize(SUparams *params, Triangle3 st, Triangle2 tt, Memimage *frag)
 			cbuf[3] = 0xFF*depth;
 			memfillcolor(frag, *(ulong*)cbuf);
 			pixel(params->fb->zb, p, frag);
-			unlock(&zbuflk);
+			unlock(&params->fb->zbuflk);
 
 			cbuf[0] = 0xFF;
 			if((tt.p0.w + tt.p1.w + tt.p2.w) != 0){
