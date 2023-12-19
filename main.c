@@ -76,7 +76,7 @@ struct Framebufctl
 	uint idx;
 	Lock swplk;
 
-	int (*draw)(Framebufctl*, Memimage*, int);
+	void (*draw)(Framebufctl*, Memimage*, int);
 	void (*swap)(Framebufctl*);
 	void (*reset)(Framebufctl*);
 };
@@ -254,18 +254,15 @@ eallocmemimage(Rectangle r, ulong chan)
 	return i;
 }
 
-static int
+static void
 framebufctl_draw(Framebufctl *ctl, Memimage *dst, int showz)
 {
-	if(canlock(&ctl->swplk)){
-		memimagedraw(dst, dst->r, showz? ctl->fb[ctl->idx]->zb: ctl->fb[ctl->idx]->cb, ZP, nil, ZP, SoverD);
-		/* XXX DBG */
-		if(shownormals)
-			memimagedraw(dst, dst->r, ctl->fb[ctl->idx]->nb, ZP, nil, ZP, SoverD);
-		unlock(&ctl->swplk);
-		return 0;
-	}
-	return -1;
+	lock(&ctl->swplk);
+	memimagedraw(dst, dst->r, showz? ctl->fb[ctl->idx]->zb: ctl->fb[ctl->idx]->cb, ZP, nil, ZP, SoverD);
+	/* XXX DBG */
+	if(shownormals)
+		memimagedraw(dst, dst->r, ctl->fb[ctl->idx]->nb, ZP, nil, ZP, SoverD);
+	unlock(&ctl->swplk);
 }
 
 static void
@@ -927,8 +924,8 @@ void
 redraw(void)
 {
 	memfillcolor(screenfb, 0x888888FF);
-	if(fbctl->draw(fbctl, screenfb, showzbuffer) < 0)
-		return;
+	fbctl->draw(fbctl, screenfb, showzbuffer);
+
 	lockdisplay(display);
 	loadimage(screen, rectaddpt(screenfb->r, screen->r.min), byteaddr(screenfb, screenfb->r.min), bytesperline(screenfb->r, screenfb->depth)*Dy(screenfb->r));
 	drawstats();
