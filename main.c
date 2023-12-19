@@ -106,6 +106,7 @@ Point3 center = {0,0,0,1};
 Point3 up = {0,1,0,0};
 Matrix3 view, proj, rota;
 double θ, ω;
+double scale;
 
 void resized(void);
 uvlong nanosec(void);
@@ -505,10 +506,16 @@ vertshader(VSparams *sp)
 		0, 1, 0, 0,
 		sin(θ+fmod(ω*sp->su->uni_time/1e9, 2*PI)), 0, cos(θ+fmod(ω*sp->su->uni_time/1e9, 2*PI)), 0,
 		0, 0, 0, 1,
+	}, S = {
+		scale, 0, 0, 0,
+		0, scale, 0, 0,
+		0, 0, scale, 0,
+		0, 0, 0, 1,
 	}, M, V;
 
 	identity3(M);
 	identity3(V);
+	mulm3(yrot, S);
 	mulm3(M, rota);
 	mulm3(M, yrot);
 	mulm3(V, view);
@@ -1027,7 +1034,7 @@ key(Rune r)
 void
 usage(void)
 {
-	fprint(2, "usage: %s [-n nprocs] [-m objfile] [-t texfile] [-a yrotangle] [-z camzpos] [-s shader]\n", argv0);
+	fprint(2, "usage: %s [-n nprocs] [-m objfile] [-t texfile] [-a yrotangle] [-z camzpos] [-s shader] [-w width] [-h height] [-S scale]\n", argv0);
 	exits("usage");
 }
 
@@ -1049,6 +1056,7 @@ threadmain(int argc, char *argv[])
 	fbw = 200;
 	fbh = 200;
 	ω = 20*DEG;
+	scale = 1;
 	ARGBEGIN{
 	case 'n':
 		nprocs = strtoul(EARGF(usage()), nil, 10);
@@ -1071,11 +1079,14 @@ threadmain(int argc, char *argv[])
 	case 's':
 		sname = EARGF(usage());
 		break;
-	case 'W':
+	case 'w':
 		fbw = strtoul(EARGF(usage()), nil, 10);
 		break;
-	case 'H':
+	case 'h':
 		fbh = strtoul(EARGF(usage()), nil, 10);
+		break;
+	case 'S':
+		scale = strtod(EARGF(usage()), nil);
 		break;
 	default: usage();
 	}ARGEND;
