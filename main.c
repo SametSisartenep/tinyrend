@@ -770,20 +770,6 @@ shade(Framebuf *fb, Shader *s)
 	chanfree(donec);
 }
 
-Point3
-ivshader(VSparams *sp)
-{
-	Matrix3 M, V;
-
-	identity3(M);
-	identity3(V);
-	mulm3(M, rota);
-	mulm3(V, view);
-	mulm3(V, M);
-
-	return xform3(*sp->p, V);
-}
-
 Memimage *
 triangleshader(FSparams *sp)
 {
@@ -819,16 +805,17 @@ Memimage *
 circleshader(FSparams *sp)
 {
 	Point2 uv;
-	double r;
+	double r, d;
 	uchar cbuf[4];
 
 	uv = Pt2(sp->p.x,sp->p.y,1);
 	uv.x /= Dx(sp->su->fb->r);
 	uv.y /= Dy(sp->su->fb->r);
 //	r = 0.3;
-	r = 0.3*sin(sp->su->uni_time/1e9);
+	r = 0.3*fabs(sin(sp->su->uni_time/1e9));
+	d = vec2len(subpt2(uv, Vec2(0.5,0.5)));
 
-	if(vec2len(subpt2(uv, Vec2(0.5,0.5))) > r)
+	if(d > r + r*0.05 || d < r - r*0.05)
 		return nil;
 
 	cbuf[0] = 0xFF;
@@ -898,6 +885,33 @@ boxshader(FSparams *sp)
 	return sp->frag;
 }
 
+Point3
+ivshader(VSparams *sp)
+{
+	Matrix3 M, V, S = {
+		scale, 0, 0, 0,
+		0, scale, 0, 0,
+		0, 0, scale, 0,
+		0, 0, 0, 1,
+	};
+
+	identity3(M);
+	identity3(V);
+	mulm3(M, rota);
+	mulm3(M, S);
+	mulm3(V, view);
+	mulm3(V, M);
+
+	return xform3(*sp->p, V);
+}
+
+Memimage *
+identshader(FSparams *sp)
+{
+	memfillcolor(sp->frag, *(ulong*)sp->cbuf);
+	return sp->frag;
+}
+
 Shader shadertab[] = {
 	{ "triangle", ivshader, triangleshader },
 	{ "circle", ivshader, circleshader },
@@ -905,6 +919,7 @@ Shader shadertab[] = {
 	{ "sf", ivshader, sfshader },
 	{ "gouraud", vertshader, gouraudshader },
 	{ "toon", vertshader, toonshader },
+	{ "ident", vertshader, identshader },
 };
 Shader *
 getshader(char *name)
