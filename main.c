@@ -1065,7 +1065,7 @@ threadmain(int argc, char *argv[])
 	int fbw, fbh;
 
 	GEOMfmtinstall();
-	mdlpath = "mdl/def.obj";
+	mdlpath = "mdl/quad.obj";
 	texpath = nil;
 	sname = "gouraud";
 	fbw = 200;
