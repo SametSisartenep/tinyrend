@@ -1,6 +1,5 @@
 #include <u.h>
 #include <libc.h>
-#include <bio.h>
 #include <thread.h>
 #include <draw.h>
 #include <memdraw.h>
@@ -8,85 +7,8 @@
 #include <keyboard.h>
 #include <geometry.h>
 #include "libobj/obj.h"
-
-#define HZ2MS(hz)	(1000/(hz))
-
-typedef Point Triangle[3];
-typedef struct VSparams VSparams;
-typedef struct FSparams FSparams;
-typedef struct SUparams SUparams;
-typedef struct Shader Shader;
-typedef struct Framebuf Framebuf;
-typedef struct Framebufctl Framebufctl;
-
-/* shader params */
-struct VSparams
-{
-	SUparams *su;
-	Point3 *p;
-	Point3 *n;
-	uint idx;
-};
-
-struct FSparams
-{
-	SUparams *su;
-	Memimage *frag;
-	Point p;
-	Point3 bc;
-	uchar *cbuf;
-};
-
-/* shader unit params */
-struct SUparams
-{
-	Framebuf *fb;
-	OBJElem **b, **e;
-	int id;
-	Channel *donec;
-
-	double var_intensity[3];
-
-	uvlong uni_time;
-
-	Point3 (*vshader)(VSparams*);
-	Memimage *(*fshader)(FSparams*);
-};
-
-struct Shader
-{
-	char *name;
-	Point3 (*vshader)(VSparams*);
-	Memimage *(*fshader)(FSparams*);
-};
-
-struct Framebuf
-{
-	Memimage *cb;
-	Memimage *zb;
-	double *zbuf;
-	Lock zbuflk;
-	Memimage *nb;	/* XXX DBG */
-	Rectangle r;
-};
-
-struct Framebufctl
-{
-	Framebuf *fb[2];
-	uint idx;
-	Lock swplk;
-
-	void (*draw)(Framebufctl*, Memimage*, int);
-	void (*swap)(Framebufctl*);
-	void (*reset)(Framebufctl*);
-};
-
-typedef struct Stats Stats;
-struct Stats
-{
-	uvlong min, avg, max, acc, n, v;
-};
-
+#include "dat.h"
+#include "fns.h"
 
 Stats fps;
 Framebufctl *fbctl;
@@ -97,7 +19,7 @@ Memimage *modeltex;
 Channel *drawc;
 int nprocs;
 int showzbuffer;
-int shownormals;
+int shownormals;	/* XXX DBG */
 
 char winspec[32];
 Point3 light = {0,-1,1,1};	/* global directional light */
@@ -108,72 +30,6 @@ Matrix3 view, proj, rota;
 double θ, ω;
 double scale;
 
-void resized(void);
-uvlong nanosec(void);
-
-int
-min(int a, int b)
-{
-	return a < b? a: b;
-}
-
-int
-max(int a, int b)
-{
-	return a > b? a: b;
-}
-
-double
-fmin(double a, double b)
-{
-	return a < b? a: b;
-}
-
-double
-fmax(double a, double b)
-{
-	return a > b? a: b;
-}
-
-void
-swap(int *a, int *b)
-{
-	int t;
-
-	t = *a;
-	*a = *b;
-	*b = t;
-}
-
-void
-swappt2(Point2 *a, Point2 *b)
-{
-	Point2 t;
-
-	t = *a;
-	*a = *b;
-	*b = t;
-}
-
-void
-swappt3(Point3 *a, Point3 *b)
-{
-	Point3 t;
-
-	t = *a;
-	*a = *b;
-	*b = t;
-}
-
-void
-memsetd(double *p, double v, usize len)
-{
-	double *dp;
-
-	for(dp = p; dp < p+len; dp++)
-		*dp = v;
-}
-
 void
 updatestats(Stats *s, uvlong v)
 {
@@ -183,190 +39,6 @@ updatestats(Stats *s, uvlong v)
 	s->avg = s->acc/s->n;
 	s->min = v < s->min || s->n == 1? v: s->min;
 	s->max = v > s->max || s->n == 1? v: s->max;
-}
-
-double
-step(double edge, double n)
-{
-	if(n < edge)
-		return 0;
-	return 1;
-}
-
-double
-smoothstep(double edge0, double edge1, double n)
-{
-	double t;
-
-	t = fclamp((n-edge0)/(edge1-edge0), 0, 1);
-	return t*t * (3 - 2*t);
-}
-
-void *
-emalloc(ulong n)
-{
-	void *p;
-
-	p = malloc(n);
-	if(p == nil)
-		sysfatal("malloc: %r");
-	setmalloctag(p, getcallerpc(&n));
-	return p;
-}
-
-void *
-erealloc(void *p, ulong n)
-{
-	void *np;
-
-	np = realloc(p, n);
-	if(np == nil){
-		if(n == 0)
-			return nil;
-		sysfatal("realloc: %r");
-	}
-	if(p == nil)
-		setmalloctag(np, getcallerpc(&p));
-	else
-		setrealloctag(np, getcallerpc(&p));
-	return np;
-}
-
-Image *
-eallocimage(Display *d, Rectangle r, ulong chan, int repl, ulong col)
-{
-	Image *i;
-
-	i = allocimage(d, r, chan, repl, col);
-	if(i == nil)
-		sysfatal("allocimage: %r");
-	return i;
-}
-
-Memimage *
-eallocmemimage(Rectangle r, ulong chan)
-{
-	Memimage *i;
-
-	i = allocmemimage(r, chan);
-	if(i == nil)
-		sysfatal("allocmemimage: %r");
-	memfillcolor(i, DTransparent);
-	return i;
-}
-
-static void
-framebufctl_draw(Framebufctl *ctl, Memimage *dst, int showz)
-{
-	lock(&ctl->swplk);
-	memimagedraw(dst, dst->r, showz? ctl->fb[ctl->idx]->zb: ctl->fb[ctl->idx]->cb, ZP, nil, ZP, SoverD);
-	/* XXX DBG */
-	if(shownormals)
-		memimagedraw(dst, dst->r, ctl->fb[ctl->idx]->nb, ZP, nil, ZP, SoverD);
-	unlock(&ctl->swplk);
-}
-
-static void
-framebufctl_swap(Framebufctl *ctl)
-{
-	lock(&ctl->swplk);
-	ctl->idx ^= 1;
-	unlock(&ctl->swplk);
-}
-
-static void
-framebufctl_reset(Framebufctl *ctl)
-{
-	Framebuf *fb;
-
-	/* address the back buffer—resetting the front buffer is VERBOTEN */
-	fb = ctl->fb[ctl->idx^1];
-	memsetd(fb->zbuf, Inf(-1), Dx(fb->r)*Dy(fb->r));
-	memfillcolor(fb->cb, DTransparent);
-	memfillcolor(fb->zb, DTransparent);
-	memfillcolor(fb->nb, DTransparent);	/* XXX DBG */
-}
-
-Framebuf *
-mkfb(Rectangle r)
-{
-	Framebuf *fb;
-
-	fb = emalloc(sizeof *fb);
-	fb->cb = eallocmemimage(r, RGBA32);
-	fb->zb = eallocmemimage(r, RGBA32);
-	fb->zbuf = emalloc(Dx(r)*Dy(r)*sizeof(*fb->zbuf));
-	memsetd(fb->zbuf, Inf(-1), Dx(r)*Dy(r));
-	memset(&fb->zbuflk, 0, sizeof(fb->zbuflk));
-	fb->nb = eallocmemimage(r, RGBA32);	/* XXX DBG */
-	fb->r = r;
-	return fb;
-}
-
-Framebufctl *
-newfbctl(Rectangle r)
-{
-	Framebufctl *fc;
-
-	fc = emalloc(sizeof *fc);
-	memset(fc, 0, sizeof *fc);
-	fc->fb[0] = mkfb(r);
-	fc->fb[1] = mkfb(r);
-	fc->draw = framebufctl_draw;
-	fc->swap = framebufctl_swap;
-	fc->reset = framebufctl_reset;
-	return fc;
-}
-
-static void
-decproc(void *arg)
-{
-	int fd, *pfd;
-
-	pfd = arg;
-	fd = pfd[2];
-
-	close(pfd[0]);
-	dup(fd, 0);
-	close(fd);
-	dup(pfd[1], 1);
-	close(pfd[1]);
-
-	execl("/bin/tga", "tga", "-9t", nil);
-	threadexitsall("execl: %r");
-}
-
-Memimage *
-readtga(char *path)
-{
-	Memimage *i;
-	int fd, pfd[3];
-
-	if(pipe(pfd) < 0)
-		sysfatal("pipe: %r");
-	fd = open(path, OREAD);
-	if(fd < 0)
-		sysfatal("open: %r");
-	pfd[2] = fd;
-	procrfork(decproc, pfd, mainstacksize, RFFDG|RFNAMEG|RFNOTEG);
-	close(pfd[1]);
-	i = readmemimage(pfd[0]);
-	close(pfd[0]);
-	close(fd);
-
-	return i;
-}
-
-Memimage *
-rgb(ulong c)
-{
-	Memimage *i;
-
-	i = eallocmemimage(Rect(0,0,1,1), screen->chan);
-	i->flags |= Frepl;
-	i->clipr = Rect(-1e6, -1e6, 1e6, 1e6);
-	memfillcolor(i, c);
-	return i;
 }
 
 void
@@ -978,7 +650,6 @@ renderer(void *arg)
 		fbctl->swap(fbctl);
 		nbsendp(drawc, nil);
 	}
-	threadexits(nil);
 }
 
 static char *

@@ -5,9 +5,15 @@ TARG=tinyrend
 OFILES=\
 	main.$O\
 	nanosec.$O\
+	alloc.$O\
+	fb.$O\
+	shadeop.$O\
+	util.$O\
 
 LIB=\
 	libobj/libobj.a$O\
+
+HFILES=dat.h fns.h
 
 </sys/src/cmd/mkone
 
