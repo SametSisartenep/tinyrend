@@ -45,26 +45,6 @@ swap(int *a, int *b)
 }
 
 void
-swappt2(Point2 *a, Point2 *b)
-{
-	Point2 t;
-
-	t = *a;
-	*a = *b;
-	*b = t;
-}
-
-void
-swappt3(Point3 *a, Point3 *b)
-{
-	Point3 t;
-
-	t = *a;
-	*a = *b;
-	*b = t;
-}
-
-void
 memsetd(double *p, double v, usize len)
 {
 	double *dp;

@@ -25,8 +25,6 @@ int max(int, int);
 double fmin(double, double);
 double fmax(double, double);
 void swap(int*, int*);
-void swappt2(Point2*, Point2*);
-void swappt3(Point3*, Point3*);
 void memsetd(double*, double, usize);
 Memimage *readtga(char*);
 Memimage *rgb(ulong);
