@@ -165,6 +165,7 @@ lookat(Point3 eye, Point3 o, Point3 up)
 	z = normvec3(subpt3(eye, o));
 	x = normvec3(crossvec3(up, z));
 	y = normvec3(crossvec3(z, x));
+	identity3(rota);
 	rota[0][0] = x.x; rota[0][1] = x.y; rota[0][2] = x.z; rota[0][3] = -o.x;
 	rota[1][0] = y.x; rota[1][1] = y.y; rota[1][2] = y.z; rota[1][3] = -o.y;
 	rota[2][0] = z.x; rota[2][1] = z.y; rota[2][2] = z.z; rota[2][3] = -o.z;
@@ -714,13 +715,37 @@ key(Rune r)
 	case Kdel:
 	case 'q':
 		threadexitsall(nil);
+	case 'w':
+	case 's':
+		camera.z += r == 'w'? -1: 1;
+		viewport(screenfb->r);
+		projection(-1.0/vec3len(subpt3(camera, center)));
+		lookat(camera, center, up);
+		mulm3(view, proj);
+		break;
+	case 'a':
+	case 'd':
+		camera.x += r == 'a'? -1: 1;
+		viewport(screenfb->r);
+		projection(-1.0/vec3len(subpt3(camera, center)));
+		lookat(camera, center, up);
+		mulm3(view, proj);
+		break;
+	case Kdown:
+	case Kup:
+		camera.y += r == Kdown? -1: 1;
+		viewport(screenfb->r);
+		projection(-1.0/vec3len(subpt3(camera, center)));
+		lookat(camera, center, up);
+		mulm3(view, proj);
+		break;
 	}
 }
 
 void
 usage(void)
 {
-	fprint(2, "usage: %s [-n nprocs] [-m objfile] [-t texfile] [-a yrotangle] [-z camzpos] [-s shader] [-w width] [-h height] [-S scale]\n", argv0);
+	fprint(2, "usage: %s [-n nprocs] [-m objfile] [-t texfile] [-a yrotangle] [-s shader] [-w width] [-h height] [-S scale]\n", argv0);
 	exits("usage");
 }
 
@@ -758,9 +783,6 @@ threadmain(int argc, char *argv[])
 		break;
 	case 'v':
 		ω = strtod(EARGF(usage()), nil)*DEG;
-		break;
-	case 'z':
-		camera.z = strtod(EARGF(usage()), nil);
 		break;
 	case 's':
 		sname = EARGF(usage());
@@ -823,7 +845,6 @@ threadmain(int argc, char *argv[])
 
 	viewport(screenfb->r);
 	projection(-1.0/vec3len(subpt3(camera, center)));
-	identity3(rota);
 	lookat(camera, center, up);
 	mulm3(view, proj);
 	light = normvec3(subpt3(light, center));
