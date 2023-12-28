@@ -706,6 +706,10 @@ mouse(Mousectl *mc, Keyboardctl *kc)
 		lmb(mc, kc);
 	if((mc->buttons&4) != 0)
 		rmb(mc, kc);
+	if((mc->buttons&8) != 0)
+		scale += 0.1;
+	if((mc->buttons&16) != 0)
+		scale -= 0.1;
 }
 
 void
@@ -745,7 +749,7 @@ key(Rune r)
 void
 usage(void)
 {
-	fprint(2, "usage: %s [-n nprocs] [-m objfile] [-t texfile] [-a yrotangle] [-s shader] [-w width] [-h height] [-S scale]\n", argv0);
+	fprint(2, "usage: %s [-n nprocs] [-m objfile] [-t texfile] [-a yrotangle] [-s shader] [-w width] [-h height]\n", argv0);
 	exits("usage");
 }
 
@@ -792,9 +796,6 @@ threadmain(int argc, char *argv[])
 		break;
 	case 'h':
 		fbh = strtoul(EARGF(usage()), nil, 10);
-		break;
-	case 'S':
-		scale = strtod(EARGF(usage()), nil);
 		break;
 	default: usage();
 	}ARGEND;
