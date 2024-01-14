@@ -22,7 +22,7 @@ int showzbuffer;
 int shownormals;	/* XXX DBG */
 
 char winspec[32];
-Point3 light = {0,-1,1,1};	/* global directional light */
+Point3 light = {0,1,1,1};	/* global directional light */
 Point3 camera = {0,0,3,1};
 Point3 center = {0,0,0,1};
 Point3 up = {0,1,0,0};
@@ -174,12 +174,7 @@ lookat(Point3 eye, Point3 o, Point3 up)
 Point3
 vertshader(VSparams *sp)
 {
-	Matrix3 yrot = {
-		cos(θ+fmod(ω*sp->su->uni_time/1e9, 2*PI)), 0, -sin(θ+fmod(ω*sp->su->uni_time/1e9, 2*PI)), 0,
-		0, 1, 0, 0,
-		sin(θ+fmod(ω*sp->su->uni_time/1e9, 2*PI)), 0, cos(θ+fmod(ω*sp->su->uni_time/1e9, 2*PI)), 0,
-		0, 0, 0, 1,
-	}, S = {
+	Matrix3 S = {
 		scale, 0, 0, 0,
 		0, scale, 0, 0,
 		0, 0, scale, 0,
@@ -188,14 +183,15 @@ vertshader(VSparams *sp)
 
 	identity3(M);
 	identity3(V);
-	mulm3(yrot, S);
 	mulm3(M, rota);
-	mulm3(M, yrot);
+	mulm3(M, S);
 	mulm3(V, view);
 	mulm3(V, M);
 
-	*sp->n = xform3(*sp->n, M);
+	*sp->n = qrotate(*sp->n, Vec3(0,1,0), θ+fmod(ω*sp->su->uni_time/1e9, 2*PI));
 	sp->su->var_intensity[sp->idx] = fmax(0, dotvec3(*sp->n, light));
+	*sp->n = xform3(*sp->n, M);
+	*sp->p = qrotate(*sp->p, Vec3(0,1,0), θ+fmod(ω*sp->su->uni_time/1e9, 2*PI));
 	*sp->p = xform3(*sp->p, V);
 	return *sp->p;
 }
@@ -407,10 +403,66 @@ shade(Framebuf *fb, Shader *s)
 				for(e = o->child; e != nil; e = e->next){
 					idxtab = &e->indextab[OBJVGeometric];
 					/* discard non-triangles */
-					if(e->type != OBJEFace || idxtab->nindex != 3)
+					if(e->type != OBJEFace || (idxtab->nindex != 3 && idxtab->nindex != 4))
 						continue;
-					elems = erealloc(elems, ++nelems*sizeof(*elems));
-					elems[nelems-1] = e;
+					if(idxtab->nindex == 4){	/* triangulate */
+						OBJElem *auxe;
+						OBJIndexArray *auxia;
+
+						auxe = emalloc(sizeof *auxe);
+						auxe->type = OBJEFace;
+						auxia = &auxe->indextab[OBJVGeometric];
+						auxia->nindex = 3;
+						auxia->indices = emalloc(auxia->nindex*sizeof(*auxia->indices));
+						auxia->indices[0] = idxtab->indices[0];
+						auxia->indices[1] = idxtab->indices[1];
+						auxia->indices[2] = idxtab->indices[2];
+						idxtab = &e->indextab[OBJVTexture];
+						auxia = &auxe->indextab[OBJVTexture];
+						auxia->nindex = 3;
+						auxia->indices = emalloc(auxia->nindex*sizeof(*auxia->indices));
+						auxia->indices[0] = idxtab->indices[0];
+						auxia->indices[1] = idxtab->indices[1];
+						auxia->indices[2] = idxtab->indices[2];
+						idxtab = &e->indextab[OBJVNormal];
+						auxia = &auxe->indextab[OBJVNormal];
+						auxia->nindex = 3;
+						auxia->indices = emalloc(auxia->nindex*sizeof(*auxia->indices));
+						auxia->indices[0] = idxtab->indices[0];
+						auxia->indices[1] = idxtab->indices[1];
+						auxia->indices[2] = idxtab->indices[2];
+						elems = erealloc(elems, ++nelems*sizeof(*elems));
+						elems[nelems-1] = auxe;
+
+						idxtab = &e->indextab[OBJVGeometric];
+						auxe = emalloc(sizeof *auxe);
+						auxe->type = OBJEFace;
+						auxia = &auxe->indextab[OBJVGeometric];
+						auxia->nindex = 3;
+						auxia->indices = emalloc(auxia->nindex*sizeof(*auxia->indices));
+						auxia->indices[0] = idxtab->indices[0];
+						auxia->indices[1] = idxtab->indices[2];
+						auxia->indices[2] = idxtab->indices[3];
+						idxtab = &e->indextab[OBJVTexture];
+						auxia = &auxe->indextab[OBJVTexture];
+						auxia->nindex = 3;
+						auxia->indices = emalloc(auxia->nindex*sizeof(*auxia->indices));
+						auxia->indices[0] = idxtab->indices[0];
+						auxia->indices[1] = idxtab->indices[2];
+						auxia->indices[2] = idxtab->indices[3];
+						idxtab = &e->indextab[OBJVNormal];
+						auxia = &auxe->indextab[OBJVNormal];
+						auxia->nindex = 3;
+						auxia->indices = emalloc(auxia->nindex*sizeof(*auxia->indices));
+						auxia->indices[0] = idxtab->indices[0];
+						auxia->indices[1] = idxtab->indices[2];
+						auxia->indices[2] = idxtab->indices[3];
+						elems = erealloc(elems, ++nelems*sizeof(*elems));
+						elems[nelems-1] = auxe;
+					}else{
+						elems = erealloc(elems, ++nelems*sizeof(*elems));
+						elems[nelems-1] = e;
+					}
 				}
 		if(nelems < nprocs){
 			nworkers = nelems;
@@ -760,7 +812,7 @@ threadmain(int argc, char *argv[])
 	Keyboardctl *kc;
 	Rune r;
 	Shader *s;
-	char *mdlpath, *texpath;
+	char *mdlpath, *texpath, *p;
 	char *sname;
 	int fbw, fbh;
 
@@ -810,8 +862,17 @@ threadmain(int argc, char *argv[])
 
 	if((model = objparse(mdlpath)) == nil)
 		sysfatal("objparse: %r");
-	if(texpath != nil && (modeltex = readtga(texpath)) == nil)
-		sysfatal("readtga: %r");
+	if(texpath != nil){
+		if((p = strrchr(texpath, '\\')) == nil)
+			p = texpath;
+		p = strchr(p, '.');
+		if(p == nil)
+			sysfatal("unknown image file");
+		if(strcmp(++p, "tga") == 0 && (modeltex = readtga(texpath)) == nil)
+			sysfatal("readtga: %r");
+		else if(strcmp(p, "png") == 0 && (modeltex = readpng(texpath)) == nil)
+			sysfatal("readpng: %r");
+	}
 
 	{
 		int i, nv[OBJNVERT], nf;

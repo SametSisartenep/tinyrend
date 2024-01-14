@@ -27,4 +27,5 @@ double fmax(double, double);
 void swap(int*, int*);
 void memsetd(double*, double, usize);
 Memimage *readtga(char*);
+Memimage *readpng(char*);
 Memimage *rgb(ulong);

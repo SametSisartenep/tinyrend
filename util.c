@@ -53,43 +53,66 @@ memsetd(double *p, double v, usize len)
 		*dp = v;
 }
 
+typedef struct Deco Deco;
+struct Deco
+{
+	int pfd[2];
+	int infd;
+	char *prog;
+};
+
 static void
 decproc(void *arg)
 {
-	int fd, *pfd;
+	char buf[32];
+	Deco *d;
 
-	pfd = arg;
-	fd = pfd[2];
+	d = arg;
 
-	close(pfd[0]);
-	dup(fd, 0);
-	close(fd);
-	dup(pfd[1], 1);
-	close(pfd[1]);
+	close(d->pfd[0]);
+	dup(d->infd, 0);
+	close(d->infd);
+	dup(d->pfd[1], 1);
+	close(d->pfd[1]);
 
-	execl("/bin/tga", "tga", "-9t", nil);
+	snprint(buf, sizeof buf, "/bin/%s", d->prog);
+
+	execl(buf, d->prog, "-9t", nil);
 	threadexitsall("execl: %r");
+}
+
+static Memimage *
+genreadimage(char *prog, char *path)
+{
+	Memimage *i;
+	Deco d;
+
+	d.prog = prog;
+
+	if(pipe(d.pfd) < 0)
+		sysfatal("pipe: %r");
+	d.infd = open(path, OREAD);
+	if(d.infd < 0)
+		sysfatal("open: %r");
+	procrfork(decproc, &d, mainstacksize, RFFDG|RFNAMEG|RFNOTEG);
+	close(d.pfd[1]);
+	i = readmemimage(d.pfd[0]);
+	close(d.pfd[0]);
+	close(d.infd);
+
+	return i;
 }
 
 Memimage *
 readtga(char *path)
 {
-	Memimage *i;
-	int fd, pfd[3];
+	return genreadimage("tga", path);
+}
 
-	if(pipe(pfd) < 0)
-		sysfatal("pipe: %r");
-	fd = open(path, OREAD);
-	if(fd < 0)
-		sysfatal("open: %r");
-	pfd[2] = fd;
-	procrfork(decproc, pfd, mainstacksize, RFFDG|RFNAMEG|RFNOTEG);
-	close(pfd[1]);
-	i = readmemimage(pfd[0]);
-	close(pfd[0]);
-	close(fd);
-
-	return i;
+Memimage *
+readpng(char *path)
+{
+	return genreadimage("png", path);
 }
 
 Memimage *
