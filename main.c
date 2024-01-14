@@ -285,7 +285,14 @@ rasterize(SUparams *params, Triangle3 st, Triangle2 tt, Memimage *frag)
 				tp.x = (tt₂.p0.x + tt₂.p1.x + tt₂.p2.x)*Dx(modeltex->r);
 				tp.y = (1 - (tt₂.p0.y + tt₂.p1.y + tt₂.p2.y))*Dy(modeltex->r);
 
-				unloadmemimage(modeltex, rectaddpt(Rect(0,0,1,1), tp), cbuf+1, sizeof cbuf - 1);
+				switch(modeltex->chan){
+				case RGB24:
+					unloadmemimage(modeltex, rectaddpt(Rect(0,0,1,1), tp), cbuf+1, sizeof cbuf - 1);
+					break;
+				case RGBA32:
+					unloadmemimage(modeltex, rectaddpt(Rect(0,0,1,1), tp), cbuf, sizeof cbuf);
+					break;
+				}
 			}else
 				memset(cbuf+1, 0xFF, sizeof cbuf - 1);
 
