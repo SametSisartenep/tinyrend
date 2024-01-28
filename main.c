@@ -390,11 +390,72 @@ shaderunit(void *arg)
 	threadexits(nil);
 }
 
+/*
+ * it only processes quads for now.
+ */
+static int
+triangulate(OBJElem **newe, OBJElem *e)
+{
+	OBJIndexArray *newidxtab;
+	OBJIndexArray *idxtab;
+
+	idxtab = &e->indextab[OBJVGeometric];
+	newe[0] = emalloc(sizeof *newe[0]);
+	newe[0]->type = OBJEFace;
+	newidxtab = &newe[0]->indextab[OBJVGeometric];
+	newidxtab->nindex = 3;
+	newidxtab->indices = emalloc(newidxtab->nindex*sizeof(*newidxtab->indices));
+	newidxtab->indices[0] = idxtab->indices[0];
+	newidxtab->indices[1] = idxtab->indices[1];
+	newidxtab->indices[2] = idxtab->indices[2];
+	idxtab = &e->indextab[OBJVTexture];
+	newidxtab = &newe[0]->indextab[OBJVTexture];
+	newidxtab->nindex = 3;
+	newidxtab->indices = emalloc(newidxtab->nindex*sizeof(*newidxtab->indices));
+	newidxtab->indices[0] = idxtab->indices[0];
+	newidxtab->indices[1] = idxtab->indices[1];
+	newidxtab->indices[2] = idxtab->indices[2];
+	idxtab = &e->indextab[OBJVNormal];
+	newidxtab = &newe[0]->indextab[OBJVNormal];
+	newidxtab->nindex = 3;
+	newidxtab->indices = emalloc(newidxtab->nindex*sizeof(*newidxtab->indices));
+	newidxtab->indices[0] = idxtab->indices[0];
+	newidxtab->indices[1] = idxtab->indices[1];
+	newidxtab->indices[2] = idxtab->indices[2];
+
+	idxtab = &e->indextab[OBJVGeometric];
+	newe[1] = emalloc(sizeof *newe[1]);
+	newe[1]->type = OBJEFace;
+	newidxtab = &newe[1]->indextab[OBJVGeometric];
+	newidxtab->nindex = 3;
+	newidxtab->indices = emalloc(newidxtab->nindex*sizeof(*newidxtab->indices));
+	newidxtab->indices[0] = idxtab->indices[0];
+	newidxtab->indices[1] = idxtab->indices[2];
+	newidxtab->indices[2] = idxtab->indices[3];
+	idxtab = &e->indextab[OBJVTexture];
+	newidxtab = &newe[1]->indextab[OBJVTexture];
+	newidxtab->nindex = 3;
+	newidxtab->indices = emalloc(newidxtab->nindex*sizeof(*newidxtab->indices));
+	newidxtab->indices[0] = idxtab->indices[0];
+	newidxtab->indices[1] = idxtab->indices[2];
+	newidxtab->indices[2] = idxtab->indices[3];
+	idxtab = &e->indextab[OBJVNormal];
+	newidxtab = &newe[1]->indextab[OBJVNormal];
+	newidxtab->nindex = 3;
+	newidxtab->indices = emalloc(newidxtab->nindex*sizeof(*newidxtab->indices));
+	newidxtab->indices[0] = idxtab->indices[0];
+	newidxtab->indices[1] = idxtab->indices[2];
+	newidxtab->indices[2] = idxtab->indices[3];
+
+	return 2;
+}
+
 void
 shade(Framebuf *fb, Shader *s)
 {
 	static int nparts, nworkers;
 	static OBJElem **elems = nil;
+	OBJElem *trielems[2];
 	int i, nelems;
 	uvlong time;
 	OBJObject *o;
@@ -412,60 +473,12 @@ shade(Framebuf *fb, Shader *s)
 					/* discard non-triangles */
 					if(e->type != OBJEFace || (idxtab->nindex != 3 && idxtab->nindex != 4))
 						continue;
-					if(idxtab->nindex == 4){	/* triangulate */
-						OBJElem *auxe;
-						OBJIndexArray *auxia;
-
-						auxe = emalloc(sizeof *auxe);
-						auxe->type = OBJEFace;
-						auxia = &auxe->indextab[OBJVGeometric];
-						auxia->nindex = 3;
-						auxia->indices = emalloc(auxia->nindex*sizeof(*auxia->indices));
-						auxia->indices[0] = idxtab->indices[0];
-						auxia->indices[1] = idxtab->indices[1];
-						auxia->indices[2] = idxtab->indices[2];
-						idxtab = &e->indextab[OBJVTexture];
-						auxia = &auxe->indextab[OBJVTexture];
-						auxia->nindex = 3;
-						auxia->indices = emalloc(auxia->nindex*sizeof(*auxia->indices));
-						auxia->indices[0] = idxtab->indices[0];
-						auxia->indices[1] = idxtab->indices[1];
-						auxia->indices[2] = idxtab->indices[2];
-						idxtab = &e->indextab[OBJVNormal];
-						auxia = &auxe->indextab[OBJVNormal];
-						auxia->nindex = 3;
-						auxia->indices = emalloc(auxia->nindex*sizeof(*auxia->indices));
-						auxia->indices[0] = idxtab->indices[0];
-						auxia->indices[1] = idxtab->indices[1];
-						auxia->indices[2] = idxtab->indices[2];
-						elems = erealloc(elems, ++nelems*sizeof(*elems));
-						elems[nelems-1] = auxe;
-
-						idxtab = &e->indextab[OBJVGeometric];
-						auxe = emalloc(sizeof *auxe);
-						auxe->type = OBJEFace;
-						auxia = &auxe->indextab[OBJVGeometric];
-						auxia->nindex = 3;
-						auxia->indices = emalloc(auxia->nindex*sizeof(*auxia->indices));
-						auxia->indices[0] = idxtab->indices[0];
-						auxia->indices[1] = idxtab->indices[2];
-						auxia->indices[2] = idxtab->indices[3];
-						idxtab = &e->indextab[OBJVTexture];
-						auxia = &auxe->indextab[OBJVTexture];
-						auxia->nindex = 3;
-						auxia->indices = emalloc(auxia->nindex*sizeof(*auxia->indices));
-						auxia->indices[0] = idxtab->indices[0];
-						auxia->indices[1] = idxtab->indices[2];
-						auxia->indices[2] = idxtab->indices[3];
-						idxtab = &e->indextab[OBJVNormal];
-						auxia = &auxe->indextab[OBJVNormal];
-						auxia->nindex = 3;
-						auxia->indices = emalloc(auxia->nindex*sizeof(*auxia->indices));
-						auxia->indices[0] = idxtab->indices[0];
-						auxia->indices[1] = idxtab->indices[2];
-						auxia->indices[2] = idxtab->indices[3];
-						elems = erealloc(elems, ++nelems*sizeof(*elems));
-						elems[nelems-1] = auxe;
+					if(idxtab->nindex == 4){
+						triangulate(trielems, e);
+						nelems += 2;
+						elems = erealloc(elems, nelems*sizeof(*elems));
+						elems[nelems-2] = trielems[0];
+						elems[nelems-1] = trielems[1];
 					}else{
 						elems = erealloc(elems, ++nelems*sizeof(*elems));
 						elems[nelems-1] = e;
