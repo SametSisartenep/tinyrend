@@ -883,7 +883,7 @@ threadmain(int argc, char *argv[])
 	if((model = objparse(mdlpath)) == nil)
 		sysfatal("objparse: %r");
 	if(texpath != nil){
-		if((p = strrchr(texpath, '\\')) == nil)
+		if((p = strrchr(texpath, '/')) == nil)
 			p = texpath;
 		p = strchr(p, '.');
 		if(p == nil)
